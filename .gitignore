@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.mlpackage
+research/coreml_export/exports/
+.DS_Store
