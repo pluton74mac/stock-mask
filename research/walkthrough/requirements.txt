@@ -1,0 +1,12 @@
+# Tested on 2026-09-25, Python 3.11, CPU only. Install torch first, from the CPU index:
+#   pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+# make_test_video.py --check needs only opencv, numpy, scipy, matplotlib and imageio-ffmpeg.
+rfdetr==1.11.0
+transformers==5.17.0
+opencv-python-headless==5.0.0.93
+numpy==2.4.6
+scipy==1.17.1
+matplotlib==3.11.2
+pillow==12.3.0
+imageio-ffmpeg==0.6.0
