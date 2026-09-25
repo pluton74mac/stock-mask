@@ -1,0 +1,138 @@
+{
+ "yolo26n_end2end": {
+  "size_mb": 9.9,
+  "inputs": [
+   [
+    "image",
+    "imageType"
+   ]
+  ],
+  "total_ops": 1141,
+  "watch": {
+   "topk": 2,
+   "gather_nd": 3
+  },
+  "transformer_ops": {
+   "matmul": 4,
+   "softmax": 2,
+   "layer_norm": 0,
+   "linear": 0
+  }
+ },
+ "yolo26n_nms": {
+  "size_mb": 5.1,
+  "inputs": [
+   [
+    "image",
+    "imageType"
+   ],
+   [
+    "iouThreshold",
+    "doubleType"
+   ],
+   [
+    "confidenceThreshold",
+    "doubleType"
+   ]
+  ],
+  "total_ops": 1110,
+  "watch": {
+   "nonMaximumSuppression": 1
+  },
+  "transformer_ops": {
+   "matmul": 4,
+   "softmax": 2,
+   "layer_norm": 0,
+   "linear": 0
+  }
+ },
+ "yolo26s_end2end": {
+  "size_mb": 38.3,
+  "inputs": [
+   [
+    "image",
+    "imageType"
+   ]
+  ],
+  "total_ops": 1141,
+  "watch": {
+   "topk": 2,
+   "gather_nd": 3
+  },
+  "transformer_ops": {
+   "matmul": 4,
+   "softmax": 2,
+   "layer_norm": 0,
+   "linear": 0
+  }
+ },
+ "yolo11n_nms": {
+  "size_mb": 5.5,
+  "inputs": [
+   [
+    "image",
+    "imageType"
+   ],
+   [
+    "iouThreshold",
+    "doubleType"
+   ],
+   [
+    "confidenceThreshold",
+    "doubleType"
+   ]
+  ],
+  "total_ops": 963,
+  "watch": {
+   "nonMaximumSuppression": 1
+  },
+  "transformer_ops": {
+   "matmul": 2,
+   "softmax": 2,
+   "layer_norm": 0,
+   "linear": 0
+  }
+ },
+ "rfdetr_nano_fp16": {
+  "size_mb": 54.3,
+  "inputs": [
+   [
+    "tensors",
+    "multiArrayType"
+   ]
+  ],
+  "total_ops": 1538,
+  "watch": {
+   "topk": 1,
+   "gather_along_axis": 2,
+   "resample": 2
+  },
+  "transformer_ops": {
+   "matmul": 28,
+   "softmax": 16,
+   "layer_norm": 46,
+   "linear": 102
+  }
+ },
+ "rfdetr_small_fp16": {
+  "size_mb": 57.7,
+  "inputs": [
+   [
+    "tensors",
+    "multiArrayType"
+   ]
+  ],
+  "total_ops": 1671,
+  "watch": {
+   "topk": 1,
+   "gather_along_axis": 2,
+   "resample": 3
+  },
+  "transformer_ops": {
+   "matmul": 30,
+   "softmax": 18,
+   "layer_norm": 49,
+   "linear": 112
+  }
+ }
+}
