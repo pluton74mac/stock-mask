@@ -5,3 +5,12 @@ venv/
 *.mlpackage
 research/coreml_export/exports/
 .DS_Store
+# Venue footage and anything derived from it stays off this public repository
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.m4v
+*.hevc
+research/walkthrough/videos/
+research/walkthrough/out/

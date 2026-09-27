@@ -34,3 +34,6 @@ yet.
   strategies under tracking drift (`python sim.py`).
 - [`research/coreml_export/`](research/coreml_export/): converting YOLO26 / YOLO11
   (Ultralytics) and RF-DETR (Roboflow) to Core ML, with an op inventory.
+- [`research/walkthrough/`](research/walkthrough/): replays a phone video of a storeroom walk
+  through hold-to-count, the detectors and 2D anti-double-count matching, before the iOS spike
+  exists (`python walkthrough.py VIDEO`). Includes how to film one.
