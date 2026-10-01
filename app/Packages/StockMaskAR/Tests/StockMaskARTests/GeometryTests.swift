@@ -43,6 +43,17 @@ struct GeometryTests {
         }
     }
 
+    @Test(arguments: FrameOrientation.allCases)
+    func sensorCameraInvertsUpright(_ o: FrameOrientation) {
+        var k = matrix_identity_float3x3
+        k[0][0] = 1450; k[1][1] = 1460; k[2][0] = 955; k[2][1] = 725
+        let sensor = CameraModel(intrinsics: k, imageSize: SIMD2(1920, 1440), transform: yaw(20, at: SIMD3(0.3, 1.4, 0.2)))
+        let back = sensor.upright(o).sensor(o)
+        #expect(back.imageSize == sensor.imageSize)
+        #expect(simd_almost_equal_elements(back.intrinsics, sensor.intrinsics, 1e-3))
+        #expect(simd_almost_equal_elements(back.transform, sensor.transform, 1e-5))
+    }
+
     @Test func unprojectInvertsProject() throws {
         let cam = CameraModel(fx: 1000, imageSize: SIMD2(1440, 1920), transform: yaw(-35, at: SIMD3(1, 1.5, 2)))
         let world = SIMD3<Float>(0.4, 1.1, 0.9)

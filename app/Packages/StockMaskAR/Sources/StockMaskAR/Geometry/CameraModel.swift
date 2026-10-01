@@ -85,6 +85,23 @@ public struct CameraModel: Sendable, Equatable {
                            imageSize: o.uprightSize(sensor: imageSize), transform: transform * turn)
     }
 
+    /// The inverse of `upright(_:)`: ARKit's camera for the stored (sensor-oriented) image, from the
+    /// upright camera `self`. StockMaskCounting wants boxes and intrinsics in that image.
+    public func sensor(_ o: FrameOrientation) -> CameraModel {
+        let size = o.uprightSize(sensor: imageSize)   // the turn is its own inverse for sizes
+        let (fx2, fy2, cx2, cy2): (Float, Float, Float, Float)
+        switch o {
+        case .up: (fx2, fy2, cx2, cy2) = (fx, fy, cx, cy)
+        case .right: (fx2, fy2, cx2, cy2) = (fy, fx, cy, imageSize.x - cx)
+        case .down: (fx2, fy2, cx2, cy2) = (fx, fy, imageSize.x - cx, imageSize.y - cy)
+        case .left: (fx2, fy2, cx2, cy2) = (fy, fx, imageSize.y - cy, cx)
+        }
+        let r = o.cameraRotation
+        let turn = simd_float4x4(columns: (SIMD4(r.columns.0, 0), SIMD4(r.columns.1, 0), SIMD4(r.columns.2, 0), SIMD4(0, 0, 0, 1)))
+        return CameraModel(intrinsics: simd_float3x3(columns: (SIMD3(fx2, 0, 0), SIMD3(0, fy2, 0), SIMD3(cx2, cy2, 1))),
+                           imageSize: size, transform: transform * turn.transpose)
+    }
+
     /// The intrinsics rescaled to another image size of the same field of view (e.g. the depth map's).
     public func scaled(to size: SIMD2<Float>) -> CameraModel {
         let s = size / imageSize

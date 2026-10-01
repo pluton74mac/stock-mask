@@ -75,24 +75,26 @@ struct TrackingTests {
 
     @Test func turningTenDegreesPerSecondReadsTen() {
         var m = ViewMotion()
-        var speed = 0.0
-        for i in 0...60 {
-            speed = m.update(transform: yaw(Float(i) / 6), timestamp: Double(i) / 60, sceneDistance: 1)
-        }
-        #expect(abs(speed - 10) < 0.5)
+        #expect(m.update(transform: yaw(0), timestamp: 0, sceneDistance: 1).speed == .infinity)   // nothing to compare yet
+        var step = ViewMotion.Step(speed: 0, shift: .zero)
+        for i in 1...60 { step = m.update(transform: yaw(Float(i) / 6), timestamp: Double(i) / 60, sceneDistance: 1) }
+        #expect(abs(step.speed - 10) < 0.05)
+        // A positive yaw turns the view left: the shift is to the left (negative across).
+        #expect(abs(step.shift.x + 1.0 / 6) < 0.01 && abs(step.shift.y) < 1e-4)
     }
 
     @Test func steppingSidewaysCountsAsViewMotion() {
         var m = ViewMotion()
-        var speed = 0.0
+        var step = ViewMotion.Step(speed: 0, shift: .zero)
         for i in 0...60 {
             let t = Double(i) / 60
-            speed = m.update(transform: .translation(SIMD3(Float(t) * 0.1, 0, 0)), timestamp: t, sceneDistance: 1)
+            step = m.update(transform: .translation(SIMD3(Float(t) * 0.1, 0, 0)), timestamp: t, sceneDistance: 1)
         }
-        #expect(abs(speed - 5.71) < 0.3)   // atan(0.1 / 1) per second
+        #expect(abs(step.speed - 5.71) < 0.05)   // atan(0.1 / 1) per second
+        #expect(step.shift.x > 0)                 // stepping right moves the view right
         var still = ViewMotion()
-        for i in 0...30 { speed = still.update(transform: yaw(3), timestamp: Double(i) / 60, sceneDistance: 1) }
-        #expect(speed < 1e-6)
+        for i in 0...30 { step = still.update(transform: yaw(3), timestamp: Double(i) / 60, sceneDistance: 1) }
+        #expect(step.speed < 1e-4 && simd_length(step.shift) < 1e-4)
     }
 
     @Test func sceneDistanceIsTheCentralMedian() {
