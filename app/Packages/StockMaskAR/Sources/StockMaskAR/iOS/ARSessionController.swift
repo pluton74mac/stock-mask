@@ -71,7 +71,11 @@ public final class ARSessionController {
             },
             attach: { [weak view] root in
                 if let anchor = root as? AnchorEntity { view?.scene.addAnchor(anchor) }
-            })
+            },
+            detach: { [weak view] root in
+                if let anchor = root as? AnchorEntity { view?.scene.removeAnchor(anchor) }
+            },
+            followsAnchors: true)
         arView = view
         run(view.session)
         return view

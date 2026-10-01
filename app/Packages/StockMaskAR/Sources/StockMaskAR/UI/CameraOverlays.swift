@@ -145,7 +145,10 @@ public struct CountingControls: View {
                 .frame(width: 96, height: 64)
             }
             Spacer()
-            ShutterButton(hold: session.hold, disabled: session.isPaused || session.isCommitting) { session.shutter() }
+            // Without a detector a commit would only mark an empty counted zone: keep the shutter off.
+            ShutterButton(hold: session.hold, disabled: session.isPaused || session.isCommitting || session.detector == nil) {
+                session.shutter()
+            }
             Spacer()
             Button {
                 Task { await session.undo() }

@@ -24,26 +24,48 @@ public final class OverlayRenderer {
 
     private let makeRoot: MakeRoot
     private let attach: @MainActor (Entity) -> Void
+    private let detach: @MainActor (Entity) -> Void
+    private let followsAnchors: Bool
     private var roots: [UUID: Entity] = [:]
     private var shown: [UUID: OverlayState.Commit] = [:]
     private var faded = false
+    public private(set) var rebuilds = 0
 
-    public init(makeRoot: @escaping MakeRoot, attach: @escaping @MainActor (Entity) -> Void) {
+    /// - Parameters:
+    ///   - followsAnchors: the roots follow their commit's anchor by themselves (ARKit-backed
+    ///     `AnchorEntity`), so an anchor move needs nothing here. Otherwise the root is moved.
+    public init(makeRoot: @escaping MakeRoot, attach: @escaping @MainActor (Entity) -> Void,
+                detach: @escaping @MainActor (Entity) -> Void = { $0.removeFromParent() }, followsAnchors: Bool = false) {
         self.makeRoot = makeRoot
         self.attach = attach
+        self.detach = detach
+        self.followsAnchors = followsAnchors
     }
 
     public var commitCount: Int { roots.count }
 
+    /// What a commit draws, apart from where its anchor is: an anchor refinement alone never
+    /// rebuilds entities (ARKit refines anchors often while it maps).
+    static func sameContent(_ a: OverlayState.Commit, _ b: OverlayState.Commit) -> Bool {
+        a.items == b.items && a.halfExtents == b.halfExtents && a.misses.map(\.id) == b.misses.map(\.id)
+            && a.misses.map(\.local) == b.misses.map(\.local)
+    }
+
     public func sync(_ state: OverlayState) {
         let wanted = Set(state.commits.map(\.id))
         for (id, root) in roots where !wanted.contains(id) {
-            root.removeFromParent()
+            detach(root)
             roots[id] = nil
             shown[id] = nil
         }
         for c in state.commits where shown[c.id] != c {
-            roots[c.id]?.removeFromParent()
+            if let old = shown[c.id], let root = roots[c.id], Self.sameContent(old, c) {
+                if !followsAnchors { root.setTransformMatrix(c.anchor, relativeTo: nil) }
+                shown[c.id] = c
+                continue
+            }
+            if let old = roots[c.id] { detach(old) }
+            rebuilds += 1
             let root = makeRoot(c)
             root.name = "commit:\(c.id.uuidString)"
             build(c, into: root)

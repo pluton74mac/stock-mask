@@ -95,6 +95,13 @@ struct OverlayTests {
         #expect(OverlayRenderer.missID(of: plus.children.first) == s.commits[0].misses[0].id)
         #expect(plus.components.has(CollisionComponent.self) && plus.components.has(BillboardComponent.self))
 
+        // An anchor refinement moves the root; it doesn't rebuild the commit's entities.
+        let before = renderer.rebuilds
+        s.move(commit: c1, to: .translation(SIMD3(0, 0.02, -1)))
+        renderer.sync(s)
+        #expect(renderer.rebuilds == before)
+        #expect(abs(root.position(relativeTo: nil).y - 0.02) < 1e-6)
+
         s.faded = true
         renderer.sync(s)
         #expect(scene.children.allSatisfy { $0.components[OpacityComponent.self]?.opacity == 0.3 })
