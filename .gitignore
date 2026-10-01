@@ -14,3 +14,6 @@ research/coreml_export/exports/
 *.hevc
 research/walkthrough/videos/
 research/walkthrough/out/
+
+# Claude Code agent worktrees
+.claude/worktrees/
