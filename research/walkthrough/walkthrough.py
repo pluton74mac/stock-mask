@@ -319,7 +319,9 @@ def box_iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 def clean(d: Dets, iou=0.5) -> Dets:
     """Class-agnostic NMS, then drop boxes drawn around a whole row of one class, and boxes around
     part of an object that a higher-scoring box of the same class already covers. Open-vocabulary
-    detectors produce both."""
+    detectors produce both. A row box must hold whole objects side by side (at least 60% of its
+    height): a front bottle holding the necks and caps of the bottles behind it is an item, not a
+    row (found while labelling; ml/LABELING.md)."""
     order, keep = np.argsort(-d.scores), []
     while len(order):
         keep.append(order[0])
@@ -327,11 +329,12 @@ def clean(d: Dets, iou=0.5) -> Dets:
     d = d.take(np.array(keep, dtype=int))
     b, n = d.boxes, len(d.scores)
     area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+    height = b[:, 3] - b[:, 1]
     cx, cy = (b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2
     ok = np.ones(n, dtype=bool)
     for i in range(n):
         inside = (d.cls == d.cls[i]) & (cx > b[i, 0]) & (cx < b[i, 2]) & (cy > b[i, 1]) & (cy < b[i, 3]) \
-            & (area < 0.6 * area[i])
+            & (area < 0.6 * area[i]) & (height >= 0.6 * height[i])
         if inside.sum() >= 2 and area[inside].sum() > 0.5 * area[i]:
             ok[i] = False  # a row or a stack, not an item
     for i in np.argsort(area):

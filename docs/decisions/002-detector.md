@@ -20,13 +20,14 @@ Status: **Accepted, pending the Phase 0 device benchmark (P0-3)** · 2026-09-25
 Full results: [`research/yolo_eval/RESULTS.md`](../../research/yolo_eval/RESULTS.md).
 
 **The test.** With COCO or zero-shot weights, through the walkthrough replay. The reference is the
-234 bottles of the second storeroom walk (three bays), counted per product.
+234 bottles of the second storeroom walk (three bays), counted per product. The counts below are
+after the cleanup fix in walkthrough RESULTS §18.
 
 | detector | bottles counted |
 |---|---|
-| RF-DETR Nano | 99 |
-| YOLO26n | 81 |
-| YOLO26s | 106 |
+| RF-DETR Nano | 102 |
+| YOLO26n | 84 |
+| YOLO26s | 111 |
 | YOLO11s | 99 |
 
 - **Every whole-bottle detector counts about the front row,** so model choice isn't the gap. Depth

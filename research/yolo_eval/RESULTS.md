@@ -1,5 +1,9 @@
 # Ultralytics YOLO against RF-DETR on the storeroom walk
 
+> **Correction, 2 October 2026.** The replay's cleanup step dropped some front bottles. After the fix, every
+> detector's total moves by 0–10 bottles and the conclusions stand. The corrected table is in
+> [walkthrough RESULTS §18](../walkthrough/RESULTS.md).
+
 Run on 2 October 2026 on an Apple M5 Mac (32 GB), with no Xcode and no iPhone. How to reproduce:
 [`README.md`](README.md). The venue footage stays off this repository; this file holds only aggregate
 numbers.
