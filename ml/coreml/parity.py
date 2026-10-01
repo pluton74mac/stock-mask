@@ -5,10 +5,10 @@ For a few frames of a video it runs:
 - **the reference:** rfdetr's own `predict()` on the full frame (its resize and normalisation);
 - **the same model in PyTorch on the 8-bit input Core ML gets** (the frame resized as `predict()`
   resizes it, then rounded to 8 bits): what part of any gap is only the 8-bit input;
-- **the exported package through coremltools, on each compute unit** (the app uses CPU + Neural
-  Engine; ADR 001), decoded exactly as the app decodes it (`DETRDecoder.swift`: sigmoid, top-300
-  query/class pairs, cx cy w h -> corners). With `--fp32-model`, also an FP32 export on the CPU,
-  which checks the conversion itself.
+- **the exported package through coremltools, on each compute unit**, decoded exactly as the app
+  decodes it (`DETRDecoder.swift`: sigmoid, top-300 query/class pairs, cx cy w h -> corners). The
+  app runs CPU + GPU by default; ADR 001 planned the Neural Engine, which drifts on a Mac (see
+  RESULTS.md). With `--fp32-model`, also an FP32 export on the CPU, which checks the conversion.
 
 Boxes are paired 1:1 by IoU (Hungarian, IoU >= 0.5, all boxes shown at >= 0.3). A run fails when
 a detection at >= 0.55 has no partner, or a pair has one score >= 0.55 and the other < 0.5 (the
@@ -129,15 +129,16 @@ def main():
     from rfdetr import RFDETRNano
 
     cu = ct.ComputeUnit
-    runs = {"fp16 CPU+NE (app)": (args.model, cu.CPU_AND_NE), "fp16 CPU+GPU": (args.model, cu.CPU_AND_GPU),
+    app = "fp16 CPU+GPU (app default)"
+    runs = {app: (args.model, cu.CPU_AND_GPU), "fp16 CPU+NE (ADR 001's plan)": (args.model, cu.CPU_AND_NE),
             "fp16 CPU": (args.model, cu.CPU_ONLY)}
     if args.fp32_model:
         runs["fp32 CPU"] = (args.fp32_model, cu.CPU_ONLY)
     models = {name: ct.models.MLModel(path, compute_units=unit) for name, (path, unit) in runs.items()}
-    meta = models["fp16 CPU+NE (app)"].user_defined_metadata
+    meta = models[app].user_defined_metadata
     classes = json.loads(meta["stockmask.classes"])
     num_select = int(meta["stockmask.num_select"])
-    res = models["fp16 CPU+NE (app)"].get_spec().description.input[0].type.imageType.width
+    res = models[app].get_spec().description.input[0].type.imageType.width
     rf = RFDETRNano()
     net = rf.model.model.eval()
     mean = torch.tensor(rf.means).view(1, 3, 1, 1)
@@ -200,8 +201,8 @@ def main():
               f"{sum(r['flipped'] for r in rows)} | {lat} |")
     with open(os.path.join(args.out, "parity.json"), "w") as f:
         json.dump(dict(model=os.path.basename(args.model), reference_total=ref_total, runs=summary), f, indent=1)
-    app_ok = summary["fp16 CPU+NE (app)"]["ok"]
-    print(f"\nthe app's configuration (fp16, CPU + Neural Engine): {'PASS' if app_ok else 'FAIL'}")
+    app_ok = summary[app]["ok"]
+    print(f"\nthe app's configuration ({app}): {'PASS' if app_ok else 'FAIL'}")
     sys.exit(0 if app_ok else 1)
 
 

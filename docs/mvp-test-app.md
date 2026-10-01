@@ -112,6 +112,21 @@ public struct CommitResult: Sendable {
   - The shutter always commits, so the AR layer disables it while tracking is limited (FR-20).
 - **FR-14 is read as "whole box, centre inside the inner frame"**, as in `walkthrough.py` and `sim.py`.
 
+**As built (StockMaskAR, 2 October 2026).** The package README has the details.
+- **Coordinates.** StockMaskAR works in the upright image (boxes, inner frame, camera, depth).
+  `CountingBridge` turns boxes and the camera back to ARKit's landscape image for StockMaskCounting.
+- **Detector input.** The app makes the model's input itself: rfdetr's bilinear resize without
+  antialiasing. Vision's antialiased resize loses bottles on its own.
+- **Compute units.** The detector runs on CPU + GPU by default: FP16 on the M5's Neural Engine
+  fails parity with PyTorch (`ml/coreml/RESULTS.md`). The HUD switches, and P0-3 decides on the
+  phone.
+- **Inner frame.** The engine's band grows to the visible part of the camera image. In portrait,
+  aspect fill crops about 38% of its width, and nothing off screen should be counted.
+- **Drift alarm.** The session undoes the flagged commit and pauses until a preview over counted
+  shelves lines up again.
+- **Relaunch.** The session and list resume. The camera forgets earlier shelves until map restore
+  (FR-24, later).
+
 `StockMaskCore` owns persistence and the sheet: venue, zone, sku, session, commit, counted_zone,
 item, item_group, manual_line and event, as in PRD §11 without `depth_multiplier`. Every commit is
 one database transaction (FR-7). The exported sheet has one line per product, with units and full
