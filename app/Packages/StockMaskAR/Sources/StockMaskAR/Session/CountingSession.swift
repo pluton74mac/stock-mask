@@ -3,16 +3,30 @@ import Observation
 import StockMaskCounting
 import simd
 
+/// Files a commit writes before the store records them (StockMaskCore: "files first"), as paths
+/// relative to the app's data directory.
+public struct CommitFiles: Sendable, Equatable {
+    public var keyframe: String?
+    public var crops: [UUID: String]
+
+    public init(keyframe: String? = nil, crops: [UUID: String] = [:]) {
+        self.keyframe = keyframe
+        self.crops = crops
+    }
+}
+
 /// Side effects the session asks of the AR layer (ARSessionController on the phone, a fake in tests).
 @MainActor
 public protocol SessionEnvironment: AnyObject {
-    /// A per-commit ARAnchor with the counted zone's transform (FR-21); the overlays hang off it.
-    func addAnchor(id: UUID, transform: simd_float4x4)
+    /// Makes the commit's ARAnchor at the counted zone's transform (FR-21) and returns its
+    /// identifier, which the store keeps as the commit's `anchorID`. Called before the save.
+    func addAnchor(id: UUID, transform: simd_float4x4) -> UUID?
     func removeAnchor(id: UUID)
     /// One haptic per commit, never one per item (FR-15).
     func commitFeedback()
-    /// Saves the commit's keyframe photo; returns its path relative to the app's documents.
-    func saveKeyframe(_ image: DetectorInput, commitID: UUID) async -> String?
+    /// Writes the commit's keyframe (upright) and its items' crops.
+    func saveFiles(_ image: DetectorInput, sessionID: UUID?, commitID: UUID,
+                   crops: [(id: UUID, box: SIMD4<Float>)]) async -> CommitFiles
 }
 
 public enum CommitTrigger: String, Sendable { case hold, shutter }
@@ -59,7 +73,7 @@ public struct Toast: Sendable, Equatable, Identifiable {
 /// outputs (FramePump) and gets side effects through `SessionEnvironment`.
 @MainActor @Observable
 public final class CountingSession {
-    public let store: any StockStore
+    public let store: any CountingStore
     public private(set) var detector: (any Detector)?
     public let embedder: (any AppearanceEmbedder)?
     public weak var environment: (any SessionEnvironment)?
@@ -67,6 +81,9 @@ public final class CountingSession {
     public var grouper = ItemGrouper()
     public var lifter = Lifter()
     public var undoWindow: TimeInterval = 5
+    /// A possible miss seen again within this distance keeps its id (StockMaskCore: an open miss
+    /// moves to the new commit instead of being listed twice).
+    public var missMatchRadius: Float = 0.04
 
     /// FR-13: auto-count can be switched off; the shutter always counts.
     public var autoCount: Bool {
@@ -102,12 +119,15 @@ public final class CountingSession {
     public private(set) var overlayRevision = 0
     public private(set) var sheet = StockSheetSummary()
     public private(set) var isCommitting = false
+    public private(set) var isLocked = false
     public private(set) var lastError: String?
+    /// A one-off message for the top of the screen (e.g. after a relaunch).
+    public var notice: String?
     public private(set) var commits = 0
     public var thermal: ThermalLevel = .nominal { didSet { hud.thermal = thermal } }
     public var battery: Float? { didSet { hud.battery = battery } }
 
-    public init(store: any StockStore, detector: (any Detector)? = nil, embedder: (any AppearanceEmbedder)? = nil) {
+    public init(store: any CountingStore, detector: (any Detector)? = nil, embedder: (any AppearanceEmbedder)? = nil) {
         self.store = store
         self.embedder = embedder
         setDetector(detector)
@@ -132,7 +152,7 @@ public final class CountingSession {
     /// The commit threshold of the model in use (FR-18: below it, outlines are dashed and never counted).
     public var commitScore: Float { counting.commitScore }
 
-    /// Counting is paused (FR-20, FR-23, PRD §10's `critical`): no hold commits, no shutter.
+    /// Counting is paused (FR-20, FR-23, PRD §10's `critical`, a locked session): no commits at all.
     public var isPaused: Bool { pauseReason != nil }
 
     // MARK: per frame
@@ -145,6 +165,7 @@ public final class CountingSession {
         innerFrame = counting.innerFrame(imageSize: f.camera.imageSize)
         pauseReason = f.tracking.pauseMessage ?? (thermal == .critical ? thermal.message : nil)
             ?? (driftAlarm ? "Counted shelves look shifted: point at a shelf you already counted" : nil)
+            ?? (isLocked ? "This count is locked" : nil)
 
         var decision = FrameDecision()
         if detector != nil, !detectorBusy, let rate = thermal.detectorRate, f.timestamp - lastDetectorStart >= 1 / rate - 1e-3 {
@@ -224,14 +245,14 @@ public final class CountingSession {
     // MARK: commits (FR-13 to FR-16, FR-21 to FR-23, FR-27)
 
     /// Runs a commit on `frame` with the stable candidates. `image` is the frame's camera image, for
-    /// the keyframe and the groups' appearance; without it, items are grouped by class only.
+    /// the keyframe, the crops and the groups' appearance; without it, items are grouped by kind.
     public func commit(_ trigger: CommitTrigger, frame: FrameSnapshot, image: DetectorInput?) async {
         guard !isCommitting else { return }
         isCommitting = true
         defer { isCommitting = false }
 
         let detections = tracks.stable(at: lastDetectorFrame ?? frame.timestamp).map(\.detection)
-        let result = counting.commit(detections, camera: frame.camera, orientation: frame.orientation,
+        var result = counting.commit(detections, camera: frame.camera, orientation: frame.orientation,
                                      sceneDepth: frame.sceneDistance)
         if result.driftAlarm {
             // The engine applied it; nothing from a view that doesn't line up is counted (FR-23).
@@ -242,48 +263,71 @@ public final class CountingSession {
             return
         }
 
-        // Group the new items by appearance (ADR 004), within each class.
+        // Group the new items by appearance (ADR 004), within what they count as.
         let n = result.newItems.count
-        let sources = result.newItems.map { $0.detectionIndex.flatMap { $0 < detections.count ? $0 : nil } }
+        let boxes: [SIMD4<Float>?] = result.newItems.map { item in
+            item.detectionIndex.flatMap { $0 < detections.count ? detections[$0].box : nil }
+        }
         var embeddings = [[Float]?](repeating: nil, count: n)
         if let embedder, let image, n > 0 {
-            let withBox = (0..<n).filter { sources[$0] != nil }
-            if let found = try? await embedder.embeddings(of: withBox.map { detections[sources[$0]!].box }, in: image) {
+            let withBox = (0..<n).filter { boxes[$0] != nil }
+            if let found = try? await embedder.embeddings(of: withBox.map { boxes[$0]! }, in: image) {
                 for (k, i) in withBox.enumerated() where k < found.count { embeddings[i] = found[k] }
             }
         }
         let keys = grouper.groups(classes: result.newItems.map { $0.cls == .bottleTop ? .bottle : $0.cls }, embeddings: embeddings)
+        for i in 0..<n { result.newItems[i].groupKey = keys[i] }
         counting.setGroupKeys(Dictionary(uniqueKeysWithValues: zip(result.newItems.map(\.id), keys)))
-        let keyframe: String? = if let image { await environment?.saveKeyframe(image, commitID: result.commitID) } else { nil }
 
-        let record = CommitRecord(id: result.commitID, zoneTransform: result.zone.transform,
-                                  zoneHalfExtents: result.zone.halfExtents, cameraTransform: frame.camera.transform,
-                                  keyframePath: keyframe,
-                                  items: zip(result.newItems, keys).map { ItemRecord($0, groupKey: $1) })
+        // Files first, then the anchor, then one transaction (StockMaskCore README).
+        let sessionID = await store.sessionID()
+        var files = CommitFiles()
+        if let image, let environment {
+            let crops = (0..<n).compactMap { i in boxes[i].map { (id: result.newItems[i].id, box: $0) } }
+            files = await environment.saveFiles(image, sessionID: sessionID, commitID: result.commitID, crops: crops)
+        }
+        let anchorID = environment?.addAnchor(id: result.commitID, transform: result.zone.transform)
+        let misses = result.possibleMisses.map { d in
+            MissRecord(id: knownMissID(near: detections[d].position) ?? UUID(), detection: detections[d], detectionIndex: d)
+        }
+        let record = CommitRecord(
+            id: result.commitID, zone: result.zone, anchorID: anchorID,
+            cameraTransform: frame.camera.sensor(frame.orientation).transform, keyframePath: files.keyframe,
+            trigger: trigger, items: result.newItems.map { ItemRecord($0, cropPath: files.crops[$0.id]) },
+            possibleMisses: misses, matchedCount: result.matched.count)
         let groups: [GroupInfo]
         do {
             groups = try await store.saveCommit(record)
         } catch {
             counting.undoLastCommit()   // nothing counted that isn't saved (FR-7)
+            environment?.removeAnchor(id: result.commitID)
             lastError = "Couldn't save the commit: \(error)"
             return
         }
 
-        overlay.add(result, detections: detections)
-        environment?.addAnchor(id: result.commitID, transform: result.zone.transform)
+        for m in misses { overlay.removeMiss(m.id) }   // a miss seen again moves to this commit
+        overlay.add(result, detections: detections, missIDs: misses.map(\.id))
         environment?.commitFeedback()
         commits += 1
         toast = Toast(text: "+\(n)")
-        card = CommitCard(commitID: result.commitID, added: n, groups: groups, possibleMisses: result.possibleMisses.count)
+        card = CommitCard(commitID: result.commitID, added: n, groups: groups, possibleMisses: misses.count)
         undoDeadline = Date().addingTimeInterval(undoWindow)
         await refreshSheet()
     }
 
-    /// FR-16: undo the last commit (the snackbar, for `undoWindow` seconds).
+    /// The id of an open possible miss within `missMatchRadius` of `position`, if any.
+    private func knownMissID(near position: SIMD3<Float>?) -> UUID? {
+        guard let position else { return nil }
+        let near = overlay.commits.flatMap(\.misses).map { ($0.missID, simd_distance($0.world, position)) }
+            .filter { $0.1 <= missMatchRadius }
+        return near.min { $0.1 < $1.1 }?.0
+    }
+
+    /// FR-16: undo the last commit (the snackbar, for `undoWindow` seconds), in the engine and the store.
     public func undo() async {
         guard let undone = counting.undoLastCommit() else { return }
         let id = undone.commitID
-        do { try await store.undoCommit(id) } catch { lastError = "Couldn't undo: \(error)" }
+        do { try await store.undoCommit(id) } catch { lastError = "Couldn't undo in the store: \(error)" }
         overlay.remove(commit: id)
         environment?.removeAnchor(id: id)
         if card?.commitID == id { card = nil }
@@ -297,11 +341,12 @@ public final class CountingSession {
         guard let miss = overlay.miss(id),
               let item = counting.addDetection(miss.detection, ofCommit: miss.commitID) else { return }
         do {
-            let group = try await store.addItem(ItemRecord(item, groupKey: 0), toCommit: miss.commitID)
+            let group = try await store.addPossibleMiss(miss.missID, item: item)
+            counting.setProductKey(group.product?.productKey, forItems: [item.id])
             overlay.accept(miss: id, as: item)
             environment?.commitFeedback()
             if card?.commitID == miss.commitID {
-                card?.groups.append(group)
+                card?.groups = try await store.groups(ofCommit: miss.commitID)
                 card?.added += 1
                 card?.possibleMisses -= 1
             }
@@ -329,13 +374,13 @@ public final class CountingSession {
 
     public func undoExpired(now: Date = Date()) { if let d = undoDeadline, now >= d { undoDeadline = nil } }
 
-    // MARK: naming, the list, export (M2)
+    // MARK: naming, the list, review, export (M2)
 
-    /// FR-28/31: the user picked a product for a group (nil: back to unknown).
-    public func name(group: GroupInfo, product: ProductInfo?) async {
+    /// FR-28/31: the user picked a product for a group. The engine's matching then prefers it.
+    public func name(group: GroupInfo, product: ProductInfo) async {
         do {
-            try await store.name(group: group.id, product: product?.id)
-            counting.setProduct(product?.id, forItems: group.itemIDs)
+            let named = try await store.name(group: group.id, product: product.id)
+            counting.setProductKey(named.product?.productKey, forItems: named.itemIDs)
             if card?.commitID == group.commitID { card?.groups = try await store.groups(ofCommit: group.commitID) }
             await refreshSheet()
         } catch {
@@ -343,11 +388,23 @@ public final class CountingSession {
         }
     }
 
+    /// FR-35: leave a group unknown on purpose (it exports as "Unknown A").
+    public func markUnknown(group id: UUID) async {
+        do {
+            let g = try await store.markUnknown(group: id)
+            counting.setProductKey(nil, forItems: g.itemIDs)
+            await refreshSheet()
+        } catch {
+            lastError = "Couldn't mark it unknown: \(error)"
+        }
+    }
+
     /// Names an unnamed line of the list (its group).
     public func name(line: SheetLine, product: ProductInfo) async {
         guard let id = line.groupID else { return }
         do {
-            try await store.name(group: id, product: product.id)
+            let named = try await store.name(group: id, product: product.id)
+            counting.setProductKey(named.product?.productKey, forItems: named.itemIDs)
             await refreshSheet()
         } catch {
             lastError = "Couldn't name the line: \(error)"
@@ -377,6 +434,17 @@ public final class CountingSession {
 
     public func refreshSheet() async {
         do { sheet = try await store.sheet() } catch { lastError = "Couldn't read the list: \(error)" }
+    }
+
+    /// FR-9: lock the count (every group named or marked unknown). A locked count is read-only.
+    public func lock() async {
+        do {
+            try await store.lock()
+            isLocked = true
+            await refreshSheet()
+        } catch {
+            lastError = "Couldn't lock: \(error)"
+        }
     }
 
     /// FR-36, through the share sheet.

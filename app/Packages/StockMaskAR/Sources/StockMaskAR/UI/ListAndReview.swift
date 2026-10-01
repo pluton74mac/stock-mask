@@ -127,8 +127,8 @@ public struct ManualLineForm: View {
     }
 }
 
-/// Finish → review → export (FR-35/36): groups still unnamed, possible misses left, totals, and the
-/// export through the share sheet.
+/// Finish → review → lock → export (FR-9, FR-35/36): groups still unnamed (blockers: name each, or
+/// leave it unknown on purpose), warnings, totals, the lock, and the export through the share sheet.
 public struct ReviewView: View {
     let session: CountingSession
     @State private var naming: SheetLine?
@@ -143,20 +143,44 @@ public struct ReviewView: View {
                 if !session.sheet.unnamed.isEmpty {
                     Section {
                         ForEach(session.sheet.unnamed) { line in
-                            Button { naming = line } label: { SheetLineRow(line: line) }.buttonStyle(.plain)
+                            HStack {
+                                Button { naming = line } label: { SheetLineRow(line: line) }.buttonStyle(.plain)
+                                Button("Leave unknown") {
+                                    if let id = line.groupID { Task { await session.markUnknown(group: id) } }
+                                }
+                                .buttonStyle(.bordered)
+                                .font(.caption)
+                            }
                         }
                     } header: {
-                        Text("Name these, or export them as unknown")
+                        Text("Name these, or leave them unknown on purpose")
                     }
                 }
-                if session.overlay.possibleMisses > 0 {
+                if !session.sheet.warnings.isEmpty {
                     Section("Warnings") {
-                        Label("\(session.overlay.possibleMisses) possible misses not checked (amber +)",
-                              systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                        ForEach(session.sheet.warnings, id: \.self) { w in
+                            Label(w, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                        }
                     }
                 }
                 Section("Totals: \(session.sheet.totalUnits) units") {
                     ForEach(session.sheet.lines) { SheetLineRow(line: $0) }
+                }
+                Section {
+                    if session.isLocked {
+                        Label("Locked: this count is read-only", systemImage: "lock.fill")
+                    } else {
+                        Button {
+                            Task { await session.lock() }
+                        } label: {
+                            Label("Lock the count", systemImage: "lock")
+                        }
+                        .disabled(!session.sheet.canLock)
+                    }
+                } footer: {
+                    if !session.sheet.canLock {
+                        Text("\(session.sheet.blockers.count) group(s) still need a product, or to be left unknown.")
+                    }
                 }
                 Section("Export") {
                     ForEach(ExportFormat.allCases) { format in
@@ -192,27 +216,54 @@ public struct ReviewView: View {
     }
 }
 
-/// Start count (PRD §7): who counts and which zone. One venue and one zone per session in the test app.
+/// Start count (PRD §7): who counts and which zone; or continue the count in progress (FR-7: one
+/// active session per device). One venue and one zone per session in the test app.
 public struct StartView: View {
     @State private var counter = ""
     @State private var zone = "Storeroom"
+    let resumable: ResumedSession?
+    let onResume: () -> Void
     let onStart: (_ counter: String, _ zone: String) -> Void
 
-    public init(onStart: @escaping (_ counter: String, _ zone: String) -> Void) { self.onStart = onStart }
+    public init(resumable: ResumedSession? = nil, onResume: @escaping () -> Void = {},
+                onStart: @escaping (_ counter: String, _ zone: String) -> Void) {
+        self.resumable = resumable
+        self.onResume = onResume
+        self.onStart = onStart
+    }
 
     public var body: some View {
         NavigationStack {
-            Form {
-                Section("Counted by") { TextField("Your name", text: $counter) }
-                Section("Zone") { TextField("Zone", text: $zone) }
-                Section {
-                    Button("Start count") { onStart(counter, zone) }
-                        .disabled(zone.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .frame(maxWidth: .infinity, minHeight: 44)
+            if let r = resumable {
+                Form {
+                    Section("Count in progress") {
+                        Text("\(r.zone), counted by \(r.counter): \(r.units) units so far")
+                        Button("Continue this count", action: onResume).frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    Section {
+                        Text("Finish it in Review (lock) before starting a new one.").font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .navigationTitle("StockMask")
+            } else {
+                startForm
             }
-            .navigationTitle("StockMask")
         }
+    }
+
+    private var startForm: some View {
+        Form {
+            Section("Counted by") { TextField("Your name", text: $counter) }
+            Section("Zone") { TextField("Zone", text: $zone) }
+            Section {
+                Button("Start count") { onStart(counter, zone) }
+                    .disabled(zone.trimmingCharacters(in: .whitespaces).isEmpty
+                              || counter.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+        }
+        .navigationTitle("StockMask")
     }
 }
 

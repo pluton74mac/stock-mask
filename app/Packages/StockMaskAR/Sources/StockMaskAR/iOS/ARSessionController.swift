@@ -35,29 +35,23 @@ public final class ARSessionController {
     @ObservationIgnored private var planes: [UUID: SupportPlane] = [:]
     @ObservationIgnored private var viewport: CGSize = .zero
     @ObservationIgnored private var lastStatusPoll: TimeInterval = 0
-    @ObservationIgnored private let keyframes: KeyframeStore?
+    @ObservationIgnored private let files: CommitFileStore
     @ObservationIgnored private let haptics = UIImpactFeedbackGenerator(style: .medium)
     @ObservationIgnored private let documents: URL
     @ObservationIgnored private let modelCache: URL
 
-    public init(session: CountingSession) {
+    /// `dataDirectory` holds the database and the commits' photos (`AppFolders.data`).
+    public init(session: CountingSession, dataDirectory: URL) {
         let fm = FileManager.default
         documents = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        modelCache = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Models")
+        modelCache = dataDirectory.appendingPathComponent("models")
         let capture = CaptureController(parent: documents.appendingPathComponent("Captures"))
         self.session = session
         self.capture = capture
-        keyframes = try? KeyframeStore(folder: documents.appendingPathComponent("Keyframes"))
+        files = CommitFileStore(dataDirectory: dataDirectory)
         pump = FramePump(session: session, capture: capture)
         session.environment = self
         loadDetector()
-    }
-
-    /// A counting session for `zone`, counted by `counter`, stored by StockMaskCore.
-    public static func start(counter: String, zone: String) async -> ARSessionController {
-        let store = CoreStockStore()
-        try? await store.startSession(venue: "Test venue", zone: zone, counter: counter)
-        return ARSessionController(session: CountingSession(store: store, embedder: FeaturePrintEmbedder()))
     }
 
     // MARK: the view
@@ -200,10 +194,12 @@ public final class ARSessionController {
 }
 
 extension ARSessionController: SessionEnvironment {
-    public func addAnchor(id: UUID, transform: simd_float4x4) {
+    /// The commit's ARAnchor, at the counted zone's transform; its identifier is the commit's anchorID.
+    public func addAnchor(id: UUID, transform: simd_float4x4) -> UUID? {
         let anchor = ARAnchor(name: "commit:\(id.uuidString)", transform: transform)
         anchors[id] = anchor
         arView?.session.add(anchor: anchor)
+        return anchor.identifier
     }
 
     public func removeAnchor(id: UUID) {
@@ -212,8 +208,9 @@ extension ARSessionController: SessionEnvironment {
 
     public func commitFeedback() { haptics.impactOccurred() }
 
-    public func saveKeyframe(_ image: DetectorInput, commitID: UUID) async -> String? {
-        try? await keyframes?.save(image, id: commitID)
+    public func saveFiles(_ image: DetectorInput, sessionID: UUID?, commitID: UUID,
+                          crops: [(id: UUID, box: SIMD4<Float>)]) async -> CommitFiles {
+        await files.save(image, sessionID: sessionID, commitID: commitID, crops: crops)
     }
 }
 

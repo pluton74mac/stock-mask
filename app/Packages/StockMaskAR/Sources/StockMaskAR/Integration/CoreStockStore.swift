@@ -3,132 +3,224 @@ import StockMaskCore
 import StockMaskCounting
 import simd
 
-// INTEGRATION: this file is written against the StockMaskCore *shim* (Shims/StockMaskCore). When
-// the real package (claude/app-core) merges, rewrite these method bodies against its API; the
-// `StockStore` protocol above it stays as it is, so nothing else in StockMaskAR changes.
+/// `CountingStore` on StockMaskCore's `StockStore` (SQLite through GRDB, one transaction per call).
+///
+/// Core's calls are synchronous. They run here one at a time on a serial queue, never inside a
+/// cancellable `Task` (StockMaskCore README, "Threading"; ADR 005): the awaiting caller can go
+/// away, the write still completes. This is the only file that imports StockMaskCore, whose
+/// record names (Commit, Item, CountedZone, CommitTrigger) overlap StockMaskCounting's and ours.
+public final class CoreStockStore: CountingStore, @unchecked Sendable {
+    public enum Problem: Error, Equatable { case noSession }
 
-/// `StockStore` on top of StockMaskCore: venue, zone, session, commits, items, groups, products,
-/// manual lines, the stock sheet and the export.
-public actor CoreStockStore: StockStore {
-    private let db: StockDatabase
-    private var venue: Venue?
-    private var zone: Zone?
+    private let store: StockStore
+    private let queue = DispatchQueue(label: "StockMask.store", qos: .userInitiated)
+    private let options: SheetOptions
+    // Only touched on `queue`.
     private var session: Session?
 
-    public init(database: StockDatabase = StockDatabase()) { db = database }
+    public init(store: StockStore, unknownName: String = "Unknown") {
+        self.store = store
+        options = SheetOptions(unknownName: unknownName)
+    }
 
-    public enum Problem: Error, Equatable { case noSession, unknownGroup }
+    /// The app's database: `<data directory>/stock.sqlite` (Application Support on the phone).
+    public static func open(at url: URL) throws -> CoreStockStore { CoreStockStore(store: try StockStore.open(at: url)) }
+
+    /// An in-memory store (tests, previews).
+    public static func inMemory() throws -> CoreStockStore { CoreStockStore(store: try StockStore.inMemory()) }
+
+    /// Runs `body` on the store's serial queue.
+    private func run<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { continuation.resume(with: Result { try body() }) }
+        }
+    }
+
+    private func current() throws -> Session {
+        guard let session else { throw Problem.noSession }
+        return session
+    }
+
+    // MARK: sessions
+
+    public func resumeSession() async throws -> ResumedSession? {
+        try await run { [self] in
+            guard let s = try store.activeSession() else { return nil }
+            session = s
+            let zone = try store.zones(venueID: s.venueID).first { $0.id == s.currentZoneID }?.name ?? ""
+            let units = try store.stockSheet(sessionID: s.id, options: options).totalUnits
+            return ResumedSession(counter: s.counterName, zone: zone, units: units)
+        }
+    }
 
     public func startSession(venue name: String, zone zoneName: String, counter: String) async throws {
-        let v = Venue(name: name, country: "AR")
-        let z = Zone(venueID: v.id, name: zoneName)
-        let s = Session(venueID: v.id, counterName: counter)
-        await db.insert(v)
-        await db.insert(z)
-        await db.insert(s)
-        venue = v
-        zone = z
-        session = s
+        try await run { [self] in
+            let venue = try store.venues().first { $0.name == name }
+                ?? store.createVenue(name: name, country: "AR", locale: "es_AR")
+            let zone = try store.zones(venueID: venue.id).first { $0.name == zoneName }
+                ?? store.addZone(venueID: venue.id, name: zoneName)
+            session = try store.startSession(venueID: venue.id, counterName: counter, zoneIDs: [zone.id], startZoneID: zone.id)
+        }
     }
+
+    public func sessionID() async -> UUID? { try? await run { [self] in session?.id } }
+
+    // MARK: commits
 
     public func saveCommit(_ c: CommitRecord) async throws -> [GroupInfo] {
-        guard let session, let zone else { throw Problem.noSession }
-        // One group per distinct key, labelled "Unknown A", "Unknown B", ... in key order.
-        let keys = Array(Set(c.items.map(\.groupKey))).sorted()
-        var byKey: [Int: ItemGroup] = [:]
-        let already = await db.groups.filter { $0.sessionID == session.id }.count
-        for (n, key) in keys.enumerated() {
-            byKey[key] = ItemGroup(sessionID: session.id, label: StockDatabase.unknownLabel(already + n))
+        try await run { [self] in
+            let s = try current()
+            guard let zoneID = s.currentZoneID else { throw Problem.noSession }
+            let draft = CommitDraft(
+                id: c.id, sessionID: s.id, zoneID: zoneID, anchorID: c.anchorID, pose: c.cameraTransform,
+                keyframePath: c.keyframePath, trigger: c.trigger == .hold ? .hold : .shutter,
+                items: c.items.map { Self.newItem($0.item, cropPath: $0.cropPath) },
+                countedZone: NewCountedZone(id: c.zone.id, transform: c.zone.transform, halfExtents: c.zone.halfExtents),
+                possibleMisses: c.possibleMisses.map { m in
+                    NewPossibleMiss(id: m.id, cls: Self.itemClass(m.detection.cls), position: m.detection.position,
+                                    confidence: m.detection.score, detectionIndex: m.detectionIndex)
+                },
+                matchedCount: c.matchedCount)
+            let saved = try store.saveCommit(draft)
+            return try saved.groups.map { try info($0.group, itemIDs: $0.itemIDs, counts: $0.counts) }
+                .sorted { $0.count != $1.count ? $0.count > $1.count : $0.label < $1.label }
         }
-        let commit = Commit(id: c.id, sessionID: session.id, zoneID: zone.id, anchorID: c.id,
-                            pose: Self.flat(c.cameraTransform), keyframeFile: c.keyframePath)
-        let zoneRecord = CountedZoneRecord(id: UUID(), commitID: c.id, transform: Self.flat(c.zoneTransform),
-                                           halfExtents: [c.zoneHalfExtents.x, c.zoneHalfExtents.y, c.zoneHalfExtents.z])
-        let items = c.items.map {
-            Item(id: $0.id, commitID: c.id, position: [$0.position.x, $0.position.y, $0.position.z], cls: $0.cls.rawValue,
-                 confidence: $0.score, groupID: byKey[$0.groupKey]?.id)
-        }
-        await db.saveCommit(commit, zone: zoneRecord, items: items, groups: keys.compactMap { byKey[$0] })
-        return try await groups(ofCommit: c.id)
     }
 
-    public func undoCommit(_ id: UUID) async throws { try await db.setUndone(commitID: id) }
+    public func undoCommit(_ id: UUID) async throws {
+        try await run { [self] in _ = try store.undoLastCommit(sessionID: try current().id, expecting: id) }
+    }
 
-    public func addItem(_ r: ItemRecord, toCommit id: UUID) async throws -> GroupInfo {
-        guard let session else { throw Problem.noSession }
-        let group = ItemGroup(sessionID: session.id, label: await db.nextUnknownLabel(sessionID: session.id))
-        await db.insert(group)
-        await db.insert(Item(id: r.id, commitID: id, position: [r.position.x, r.position.y, r.position.z], cls: r.cls.rawValue,
-                             confidence: r.score, groupID: group.id))
-        guard let info = try await groups(ofCommit: id).first(where: { $0.id == group.id }) else { throw Problem.unknownGroup }
-        return info
+    public func addPossibleMiss(_ missID: UUID, item: CountedItem) async throws -> GroupInfo {
+        try await run { [self] in
+            let added = try store.addPossibleMiss(missID, item: Self.newItem(item, cropPath: nil))
+            return try group(added.groupID)
+        }
     }
 
     public func groups(ofCommit id: UUID) async throws -> [GroupInfo] {
-        let items = await db.items.filter { $0.commitID == id && !$0.removed }
-        let all = await db.groups
-        let skus = await db.skus
-        var members: [UUID: (ids: [UUID], cls: String)] = [:]
-        for i in items { if let g = i.groupID { members[g, default: ([], i.cls)].ids.append(i.id) } }
-        var out: [GroupInfo] = []
-        for (gid, m) in members {
-            guard let g = all.first(where: { $0.id == gid }) else { continue }
-            let product = g.skuID.flatMap { s in skus.first { $0.id == s } }.map(Self.info)
-            out.append(GroupInfo(id: gid, commitID: id, key: 0, label: g.label, cls: ObjectClass(rawValue: m.cls) ?? .bottle,
-                                 itemIDs: m.ids, product: product))
+        try await run { [self] in
+            try store.groups(sessionID: try current().id).filter { $0.commitID == id }
+                .map { try group($0.id) }
+                .filter { $0.count > 0 }
+                .sorted { $0.count != $1.count ? $0.count > $1.count : $0.label < $1.label }
         }
-        out.sort { $0.count != $1.count ? $0.count > $1.count : $0.label < $1.label }
-        for k in out.indices { out[k].key = k }
-        return out
     }
 
-    public func name(group id: UUID, product: UUID?) async throws { try await db.assign(groupID: id, skuID: product) }
+    // MARK: naming and products
+
+    public func name(group id: UUID, product: UUID) async throws -> GroupInfo {
+        try await run { [self] in
+            _ = try store.nameGroup(id, sku: product)
+            return try group(id)
+        }
+    }
+
+    public func markUnknown(group id: UUID) async throws -> GroupInfo {
+        try await run { [self] in
+            _ = try store.markGroupUnknown(id)
+            return try group(id)
+        }
+    }
 
     public func products(matching query: String) async throws -> [ProductInfo] {
-        await db.searchSkus(query).map(Self.info)
+        try await run { [self] in try store.searchSKUs(venueID: try current().venueID, matching: query).map(Self.product) }
     }
 
     public func createProduct(_ d: ProductDraft) async throws -> ProductInfo {
-        let sku = Sku(code: d.code, name: d.name, brand: d.brand, sizeML: d.sizeML, unitsPerCase: d.unitsPerCase)
-        await db.insert(sku)
-        return Self.info(sku)
+        try await run { [self] in
+            Self.product(try store.createSKU(venueID: try current().venueID,
+                                             SKUFields(code: d.code, name: d.name, brand: d.brand, sizeML: d.sizeML,
+                                                       unitsPerCase: d.unitsPerCase)))
+        }
     }
 
     public func addManualLine(product: UUID, fullCases: Int, looseUnits: Int, note: String) async throws {
-        guard let session, let zone else { throw Problem.noSession }
-        await db.insert(ManualLine(sessionID: session.id, zoneID: zone.id, skuID: product, fullCases: fullCases,
-                                   looseUnits: looseUnits, note: note))
+        try await run { [self] in
+            let s = try current()
+            guard let zoneID = s.currentZoneID else { throw Problem.noSession }
+            _ = try store.addManualLine(sessionID: s.id, zoneID: zoneID, skuID: product, fullCases: fullCases,
+                                        looseUnits: looseUnits, note: note.isEmpty ? nil : note)
+        }
     }
 
+    // MARK: the sheet, review, export
+
     public func sheet() async throws -> StockSheetSummary {
-        guard let session else { return StockSheetSummary() }
-        let sheet = await db.sheet(sessionID: session.id)
-        let skus = await db.skus
-        return StockSheetSummary(lines: sheet.lines.map { l in
-            SheetLine(id: l.id, label: l.label, product: l.skuID.flatMap { s in skus.first { $0.id == s } }.map(Self.info),
-                      groupID: l.groupID, units: l.totalUnits, fullCases: l.fullCases, looseUnits: l.looseUnits,
-                      source: l.source)
-        })
+        try await run { [self] in
+            guard let s = session else { return StockSheetSummary() }
+            let sheet = try store.stockSheet(sessionID: s.id, options: options)
+            let names = Dictionary(uniqueKeysWithValues: sheet.lines.map { ($0.id, $0.name) })
+            var blockers: [String] = [], warnings: [String] = []
+            for issue in sheet.review.issues {
+                switch issue {
+                case .unnamedGroup(let key): blockers.append("\(names[key] ?? "A group") has no product yet")
+                case .possibleMissesLeft(_, let n): warnings.append("\(n) possible misses (amber +) not checked")
+                case .zoneWithoutCounts(let z):
+                    warnings.append("\(sheet.zones.first { $0.id == z }?.name ?? "A zone") has no counts")
+                case .unitsPerCaseMissing(let key): warnings.append("\(names[key] ?? "A product") needs units per case")
+                }
+            }
+            return StockSheetSummary(lines: sheet.lines.map { line in
+                SheetLine(id: "\(line.id)", label: line.name, product: line.sku.map(Self.product),
+                          groupID: line.unknownGroupID, units: line.quantity.totalUnits ?? 0,
+                          fullCases: line.quantity.fullCases, looseUnits: line.quantity.looseUnits,
+                          source: line.sources.map(\.rawValue).joined(separator: "+"),
+                          flagged: line.flags.contains(.unitsPerCaseMissing))
+            }, blockers: blockers, warnings: warnings)
+        }
+    }
+
+    public func lock() async throws {
+        try await run { [self] in session = try store.lockSession(try current().id) }
     }
 
     public func export(_ format: ExportFormat, to directory: URL) async throws -> URL {
-        guard let session, let venue, let zone else { throw Problem.noSession }
-        guard format != .xlsx else { throw CoreShimError.xlsxNotInShim }   // the real StockMaskCore writes XLSX
-        let sheet = await db.sheet(sessionID: session.id)
-        let csv = CSVExport.csv(sheet, session: session, venue: venue, zone: zone.name, skus: await db.skus,
-                                argentina: format == .csvArgentina)
-        let stamp = ISO8601DateFormatter.string(from: session.startedAt, timeZone: .current,
-                                                formatOptions: [.withFullDate])
-        let url = directory.appendingPathComponent("stock-\(stamp)-\(format == .csvArgentina ? "excel" : "standard").csv")
-        try Data(csv.utf8).write(to: url, options: .atomic)
-        return url
+        try await run { [self] in
+            let s = try current()
+            let sheet = try store.stockSheet(sessionID: s.id, options: options)
+            let file = switch format {
+            case .csvArgentina: StockSheetExport.csv(sheet, dialect: .excelArgentina)
+            case .csvStandard: StockSheetExport.csv(sheet, dialect: .standard)
+            case .xlsx: StockSheetExport.xlsx(sheet)
+            }
+            let url = directory.appendingPathComponent(file.fileName)
+            try file.data.write(to: url, options: .atomic)
+            try store.recordEvent(.sheetExported, sessionID: s.id, payload: ["format": .string(format.rawValue)])
+            return url
+        }
     }
 
-    static func info(_ s: Sku) -> ProductInfo {
-        ProductInfo(id: s.id, name: s.name, sizeML: s.sizeML, unitsPerCase: s.unitsPerCase, code: s.code)
+    // MARK: mapping
+
+    /// A group with its live items (not removed, commit not undone) and what they count as.
+    private func group(_ id: UUID) throws -> GroupInfo {
+        guard let g = try store.groups(sessionID: try current().id).first(where: { $0.id == id }) else {
+            throw StoreError.notFound("group", id)
+        }
+        let items = try store.items(inGroup: id)
+        var counts: [ItemClass: Int] = [:]
+        for i in items { counts[i.cls.countsAs, default: 0] += 1 }
+        return try info(g, itemIDs: items.map(\.id), counts: counts)
     }
 
-    static func flat(_ m: simd_float4x4) -> [Float] {
-        [m.columns.0, m.columns.1, m.columns.2, m.columns.3].flatMap { [$0.x, $0.y, $0.z, $0.w] }
+    private func info(_ g: ItemGroup, itemIDs: [UUID], counts: [ItemClass: Int]) throws -> GroupInfo {
+        let kind = counts.max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key ?? .bottle
+        return GroupInfo(id: g.id, commitID: g.commitID ?? UUID(), label: "\(options.unknownName) \(g.label)",
+                         cls: ObjectClass(rawValue: kind.rawValue) ?? .bottle, itemIDs: itemIDs,
+                         product: try g.skuID.flatMap { try store.sku(id: $0) }.map(Self.product),
+                         markedUnknown: g.state == .markedUnknown)
+    }
+
+    static func product(_ s: SKU) -> ProductInfo {
+        ProductInfo(id: s.id, name: s.name, sizeML: s.sizeML, unitsPerCase: s.unitsPerCase, code: s.code ?? "",
+                    productKey: s.productKey)
+    }
+
+    static func itemClass(_ c: ObjectClass) -> ItemClass { ItemClass(rawValue: c.rawValue) ?? .bottle }
+
+    static func newItem(_ i: CountedItem, cropPath: String?) -> NewItem {
+        NewItem(id: i.id, cls: itemClass(i.cls), position: i.position, top: i.top, productKey: i.productKey,
+                confidence: i.confidence, detectionIndex: i.detectionIndex, groupKey: i.groupKey, cropPath: cropPath)
     }
 }

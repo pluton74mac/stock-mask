@@ -11,10 +11,7 @@ let package = Package(
     products: [.library(name: "StockMaskAR", targets: ["StockMaskAR"])],
     dependencies: [
         .package(path: "../StockMaskCounting"),
-        // INTEGRATION: a shim stands in for StockMaskCore, which is written on another branch
-        // (claude/app-core). When it merges, change this path to "../StockMaskCore", rewrite
-        // Integration/CoreStockStore.swift against its API, and delete Shims/.
-        .package(path: "Shims/StockMaskCore"),
+        .package(path: "../StockMaskCore"),
     ],
     targets: [
         .target(

@@ -15,6 +15,8 @@ public struct OverlayState: Sendable, Equatable {
     }
 
     public struct Miss: Sendable, Equatable, Identifiable {
+        /// The store's id for this miss; it stays the same when a later commit sees it again.
+        public var missID: UUID
         public var commitID: UUID
         public var detection: Int
         public var cls: ObjectClass
@@ -22,7 +24,7 @@ public struct OverlayState: Sendable, Equatable {
         public var box: SIMD4<Float>
         public var world: SIMD3<Float>
         public var local: SIMD3<Float>
-        public var id: String { "\(commitID.uuidString)#\(detection)" }
+        public var id: String { missID.uuidString }
     }
 
     public struct Commit: Sendable, Equatable, Identifiable {
@@ -42,14 +44,18 @@ public struct OverlayState: Sendable, Equatable {
     public var itemCount: Int { commits.reduce(0) { $0 + $1.items.count } }
     public var possibleMisses: Int { commits.reduce(0) { $0 + $1.misses.count } }
 
-    public mutating func add(_ result: CommitResult, detections: [Detection]) {
+    /// Adds a commit's overlays. `missIDs` are the store's ids of `result.possibleMisses`, in order
+    /// (new ones get fresh ids).
+    public mutating func add(_ result: CommitResult, detections: [Detection], missIDs: [UUID]? = nil) {
         let toLocal = result.zone.transform.inverse
         func local(_ p: SIMD3<Float>) -> SIMD3<Float> { (toLocal * SIMD4(p, 1)).xyz }
         let items = result.newItems.map { Item(id: $0.id, cls: $0.cls, local: local($0.position)) }
-        let misses = result.possibleMisses.compactMap { i -> Miss? in
+        let misses = result.possibleMisses.enumerated().compactMap { k, i -> Miss? in
             guard i < detections.count, let p = detections[i].position else { return nil }
             let d = detections[i]
-            return Miss(commitID: result.commitID, detection: i, cls: d.cls, score: d.score, box: d.box, world: p, local: local(p))
+            let id = missIDs.flatMap { k < $0.count ? $0[k] : nil } ?? UUID()
+            return Miss(missID: id, commitID: result.commitID, detection: i, cls: d.cls, score: d.score, box: d.box,
+                        world: p, local: local(p))
         }
         commits.removeAll { $0.id == result.commitID }
         commits.append(Commit(id: result.commitID, anchor: result.zone.transform, halfExtents: result.zone.halfExtents,
@@ -66,6 +72,11 @@ public struct OverlayState: Sendable, Equatable {
         for m in commits[i].misses.indices {
             commits[i].misses[m].world = (transform * SIMD4(commits[i].misses[m].local, 1)).xyz
         }
+    }
+
+    /// Takes a miss off whichever commit shows it (it was seen again in a later one).
+    public mutating func removeMiss(_ missID: UUID) {
+        for c in commits.indices { commits[c].misses.removeAll { $0.missID == missID } }
     }
 
     public func miss(_ id: String) -> Miss? {

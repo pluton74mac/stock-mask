@@ -23,14 +23,21 @@ actor FakeDetector: Detector {
 final class FakeEnvironment: SessionEnvironment {
     var anchors: [UUID: simd_float4x4] = [:]
     var feedback = 0
-    var keyframes = 0
+    var files: CommitFileStore?
+    var saved: [CommitFiles] = []
 
-    func addAnchor(id: UUID, transform: simd_float4x4) { anchors[id] = transform }
+    func addAnchor(id: UUID, transform: simd_float4x4) -> UUID? {
+        anchors[id] = transform
+        return UUID()
+    }
     func removeAnchor(id: UUID) { anchors[id] = nil }
     func commitFeedback() { feedback += 1 }
-    func saveKeyframe(_ image: DetectorInput, commitID: UUID) async -> String? {
-        keyframes += 1
-        return "keyframes/\(commitID.uuidString).jpg"
+    func saveFiles(_ image: DetectorInput, sessionID: UUID?, commitID: UUID,
+                   crops: [(id: UUID, box: SIMD4<Float>)]) async -> CommitFiles {
+        let f = await files?.save(image, sessionID: sessionID, commitID: commitID, crops: crops)
+            ?? CommitFiles(keyframe: "sessions/test/keyframes/\(commitID).jpg")
+        saved.append(f)
+        return f
     }
 }
 
@@ -47,7 +54,7 @@ final class Walk {
     var scene: SyntheticScene
     let detector = FakeDetector()
     let environment = FakeEnvironment()
-    let store = CoreStockStore()
+    let store: CoreStockStore
     let session: CountingSession
     let pump: FramePump
     var t: TimeInterval = 0
@@ -55,9 +62,12 @@ final class Walk {
     var tracking: TrackingStatus = .normal
     /// Tracking error: the pose ARKit reports is `drift * true pose`; the image and depth are true.
     var drift = matrix_identity_float4x4
+    /// What the camera image is (only keyframes and crops look at it).
+    var image = tinyImage
 
     init(_ scene: SyntheticScene, capture: CaptureController? = nil) async throws {
         self.scene = scene
+        store = try CoreStockStore.inMemory()
         session = CountingSession(store: store, detector: detector)
         pump = FramePump(session: session, capture: capture)
         session.environment = environment
@@ -80,7 +90,7 @@ final class Walk {
                          full: { FrameSnapshot(timestamp: t, camera: reported, orientation: .right,
                                                depth: scene.depthMap(camera: cam), tracking: tracking,
                                                planes: [scene.plane]) },
-                         image: { DetectorInput(image: tinyImage) },
+                         image: { DetectorInput(image: image) },
                          captureFrame: { dets in
                              CaptureFrame(timestamp: self.t, image: .jpeg(Data([0xFF, 0xD8, 0xFF, 0xD9]), width: 2, height: 2),
                                           depth: nil, intrinsics: cam.intrinsics, cameraTransform: cam.transform,
@@ -154,17 +164,20 @@ struct SessionTests {
         #expect(walk.session.sheet.lines.first?.units == 11)
         #expect(walk.session.sheet.lines.first?.quantityText == "1 × 6 + 5")
 
-        let file = try Data(contentsOf: try await walk.session.export(.csvArgentina))
+        let csvURL = try await walk.session.export(.csvArgentina)
+        let file = try Data(contentsOf: csvURL)
         #expect(Array(file.prefix(3)) == [0xEF, 0xBB, 0xBF])   // UTF-8 BOM, for Excel in Argentina
         let csv = String(decoding: file, as: UTF8.self)
-        #expect(csv.contains("session_id;venue;zone;"))
-        #expect(csv.contains(";Test Gin;") && csv.contains(";700;6;1;5;11;camera+manual;"))
-        // XLSX comes with the real StockMaskCore; the shim refuses it.
-        await #expect(throws: (any Error).self) { _ = try await walk.session.export(.xlsx) }
+        #expect(csv.hasPrefix("\u{FEFF}session_id;venue;zone;"))
+        #expect(csv.contains(";Test Gin;") && csv.contains(";700;6;1;5;11;camera+manual;"), "\(csv)")
+        let xlsx = try await walk.session.export(.xlsx)
+        #expect(xlsx.pathExtension == "xlsx")
+        #expect(Array(try Data(contentsOf: xlsx).prefix(2)) == [0x50, 0x4B])   // a ZIP (Office Open XML)
 
         // Undo the commit: its items leave the list and the overlays, the anchor goes.
         await walk.session.undo()
         #expect(walk.session.sheet.lines.first?.units == 8)   // only the manual line is left
+        #expect(walk.session.sheet.lines.first?.source == "manual")
         #expect(walk.session.overlay.commits.isEmpty && walk.environment.anchors.isEmpty)
         #expect(walk.session.card == nil)
     }
@@ -174,6 +187,50 @@ struct SessionTests {
     static let longShelf = SyntheticScene(bottles: stride(from: Float(-0.30), through: 0.30, by: 0.12).map {
         SyntheticScene.Bottle(x: $0, front: 1.0)
     })
+
+    @Test func reviewBlocksTheLockUntilEveryGroupIsNamedOrLeftUnknown() async throws {
+        let walk = try await Walk(Self.longShelf)
+        await walk.hold(1.2)
+        #expect(walk.session.sheet.blockers.count == 1 && !walk.session.sheet.canLock)
+        await walk.session.lock()
+        #expect(!walk.session.isLocked && walk.session.lastError != nil)
+        let group = try #require(walk.session.card?.groups.first)
+        await walk.session.markUnknown(group: group.id)
+        #expect(walk.session.sheet.canLock)
+        await walk.session.lock()
+        #expect(walk.session.isLocked)
+        // Locked: read-only, so counting stops.
+        await walk.lookAway()
+        await walk.hold(1.2)
+        #expect(walk.session.commits == 1 && walk.session.pauseReason == "This count is locked")
+    }
+
+    @Test func filesComeFirstAndMissesKeepTheirIDs() async throws {
+        let data = FileManager.default.temporaryDirectory.appendingPathComponent("data-\(UUID().uuidString)")
+        let walk = try await Walk(Self.longShelf)
+        walk.environment.files = CommitFileStore(dataDirectory: data)
+        walk.image = CGContext(data: nil, width: 1440, height: 1920, bitsPerComponent: 8, bytesPerRow: 1440 * 4,
+                               space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+            .makeImage()!
+        walk.visible = [0, 1, 2, 4, 5]
+        await walk.hold(1.2)
+        let files = try #require(walk.environment.saved.first)
+        let keyframe = try #require(files.keyframe)
+        #expect(keyframe.hasPrefix("sessions/") && keyframe.contains("/keyframes/"))
+        #expect(FileManager.default.fileExists(atPath: data.appendingPathComponent(keyframe).path))
+        #expect(files.crops.count == 5)
+        // The same miss seen in two later views keeps one id (and one amber "+").
+        walk.visible = nil
+        await walk.lookAway()
+        await walk.hold(1.2)
+        let first = try #require(walk.session.overlay.commits.flatMap(\.misses).first)
+        await walk.lookAway()
+        await walk.hold(1.2)
+        #expect(walk.session.commits == 3)
+        let misses = walk.session.overlay.commits.flatMap(\.misses)
+        #expect(misses.count == 1 && misses.first?.missID == first.missID)
+        #expect(misses.first?.commitID == walk.session.overlay.commits.last?.id)
+    }
 
     @Test func aBottleMissedInsideACountedZoneIsOnlySuggested() async throws {
         let walk = try await Walk(Self.longShelf)

@@ -8,17 +8,23 @@ import Testing
 @Suite("Screens and keyframes", .serialized)
 @MainActor
 struct ScreenTests {
-    @Test func keyframesAreSavedUpright() async throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("keyframes-\(UUID().uuidString)/Keyframes")
-        let store = try KeyframeStore(folder: folder)
+    @Test func keyframesAndCropsAreSavedUpright() async throws {
+        let data = FileManager.default.temporaryDirectory.appendingPathComponent("files-\(UUID().uuidString)")
+        let store = CommitFileStore(dataDirectory: data)
         let ctx = CGContext(data: nil, width: 64, height: 32, bitsPerComponent: 8, bytesPerRow: 256,
                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
-        let id = UUID()
-        let path = try await store.save(DetectorInput(image: ctx.makeImage()!, orientation: .right), id: id)
-        #expect(path == "Keyframes/\(id.uuidString).jpg")
-        let src = try #require(CGImageSourceCreateWithURL(folder.appendingPathComponent("\(id.uuidString).jpg") as CFURL, nil))
-        let image = try #require(CGImageSourceCreateImageAtIndex(src, 0, nil))
-        #expect(image.width == 32 && image.height == 64)   // portrait, as the user saw it
+        let session = UUID(), commit = UUID(), item = UUID()
+        let files = await store.save(DetectorInput(image: ctx.makeImage()!, orientation: .right), sessionID: session,
+                                     commitID: commit, crops: [(item, SIMD4(0.25, 0.5, 0.75, 1))])
+        let s = session.uuidString.lowercased()
+        #expect(files.keyframe == "sessions/\(s)/keyframes/\(commit.uuidString.lowercased()).jpg")
+        func size(_ path: String) throws -> (Int, Int) {
+            let src = try #require(CGImageSourceCreateWithURL(data.appendingPathComponent(path) as CFURL, nil))
+            let image = try #require(CGImageSourceCreateImageAtIndex(src, 0, nil))
+            return (image.width, image.height)
+        }
+        #expect(try size(files.keyframe!) == (32, 64))         // portrait, as the user saw it
+        #expect(try size(try #require(files.crops[item])) == (16, 32))   // the lower middle of it
     }
 
     /// Renders the counting screen offscreen with a counted shelf, a card and the HUD: the whole

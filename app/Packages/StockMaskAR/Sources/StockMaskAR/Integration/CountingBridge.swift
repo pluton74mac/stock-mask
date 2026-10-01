@@ -9,7 +9,6 @@ import simd
 public struct CountingBridge: Sendable {
     public private(set) var trigger = HoldTrigger()
     public private(set) var engine = CommitEngine()
-    private var productKeys: [UUID: Int] = [:]
 
     public init() {}
 
@@ -81,14 +80,9 @@ public struct CountingBridge: Sendable {
         for (key, ids) in Dictionary(grouping: keys.keys, by: { keys[$0]! }) { engine.setGroupKey(key, forItems: ids) }
     }
 
-    /// FR-28: a group was named; later matches prefer the same product. nil un-names.
-    public mutating func setProduct(_ product: UUID?, forItems ids: [UUID]) {
-        let key = product.map { p in
-            if let k = productKeys[p] { return k }
-            let k = productKeys.count + 1
-            productKeys[p] = k
-            return k
-        }
+    /// FR-28: a group was named (StockMaskCore's `SKU.productKey`), or marked unknown (nil). Later
+    /// matches prefer counted items of the same product.
+    public mutating func setProductKey(_ key: Int?, forItems ids: [UUID]) {
         engine.setProductKey(key, forItems: ids)
     }
 

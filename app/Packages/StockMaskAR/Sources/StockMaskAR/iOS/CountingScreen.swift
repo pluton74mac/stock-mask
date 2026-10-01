@@ -5,11 +5,13 @@ import RealityKit
 import SwiftUI
 import UIKit
 
-/// The app's root (the thin app target shows only this): a LiDAR check, the start screen, then the
-/// counting screen.
+/// The app's root (the thin app target shows only this): a LiDAR check, the database, then the
+/// start screen (or the count in progress, FR-7), then the counting screen.
 public struct StockMaskRootView: View {
+    @State private var store: CoreStockStore?
+    @State private var resumable: ResumedSession?
     @State private var controller: ARSessionController?
-    @State private var starting = false
+    @State private var problem: String?
 
     public init() {}
 
@@ -18,13 +20,54 @@ public struct StockMaskRootView: View {
             UnsupportedDeviceView()   // ADR 001: LiDAR devices only
         } else if let controller {
             CountingScreen(controller: controller)
+        } else if let store {
+            StartView(resumable: resumable, onResume: {
+                open(store, notice: "Counting continues. After a restart the camera doesn't remember what it "
+                    + "counted before (map restore comes later): don't count those shelves again.")
+            }, onStart: { counter, zone in
+                Task {
+                    do {
+                        try await store.startSession(venue: "Test venue", zone: zone, counter: counter)
+                        open(store, notice: nil)
+                    } catch {
+                        problem = "\(error)"
+                    }
+                }
+            })
+            .overlay(alignment: .bottom) { if let problem { Text(problem).foregroundStyle(.red).padding() } }
         } else {
-            StartView { counter, zone in
-                guard !starting else { return }
-                starting = true
-                Task { controller = await ARSessionController.start(counter: counter, zone: zone) }
+            ProgressView().task {
+                do {
+                    let dir = try AppFolders.data()
+                    let s = try CoreStockStore.open(at: dir.appendingPathComponent("stock.sqlite"))
+                    resumable = try await s.resumeSession()
+                    store = s
+                } catch {
+                    problem = "Couldn't open the database: \(error)"
+                }
             }
+            .overlay { if let problem { Text(problem).foregroundStyle(.red).padding() } }
         }
+    }
+
+    private func open(_ store: CoreStockStore, notice: String?) {
+        guard let dir = try? AppFolders.data() else { return }
+        let session = CountingSession(store: store, embedder: FeaturePrintEmbedder())
+        session.notice = notice
+        Task { await session.refreshSheet() }
+        controller = ARSessionController(session: session, dataDirectory: dir)
+    }
+}
+
+/// Where the app keeps its data: `Application Support/StockMask` (the database `stock.sqlite`, the
+/// commits' photos under `sessions/`, compiled models under `models/`). Captures and models to swap
+/// in go to Documents, which the Files app and Finder show.
+public enum AppFolders {
+    public static func data() throws -> URL {
+        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("StockMask")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 }
 

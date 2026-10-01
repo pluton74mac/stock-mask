@@ -119,13 +119,13 @@ struct OverlayTests {
         #expect(abs(r.rect(box, in: view).height - m.rect(box, in: view).height) < 1e-3)
     }
 
-    @Test func theInnerFrameStaysOnScreen() {
+    @Test func theInnerFrameStaysOnScreen() throws {
         // 393 x 852 pt shows the middle 62% of a 1440 x 1920 portrait image's width.
         let m = DisplayMapping.aspectFill(upright: CGSize(width: 1440, height: 1920), view: CGSize(width: 393, height: 852),
                                           orientation: .right)
         let visible = m.visibleRegion()
         #expect(abs(visible.x - 0.1925) < 1e-3 && abs(visible.z - 0.8075) < 1e-3 && visible.y == 0 && visible.w == 1)
-        let session = CountingSession(store: CoreStockStore())
+        let session = CountingSession(store: try CoreStockStore.inMemory())
         session.setVisibleRegion(visible, imageSize: SIMD2(1440, 1920))
         #expect(session.innerFrame.x >= visible.x && session.innerFrame.z <= visible.z)
         // An iPad-like 3:4 screen crops nothing: the default band (0.15 of the short side) stays.

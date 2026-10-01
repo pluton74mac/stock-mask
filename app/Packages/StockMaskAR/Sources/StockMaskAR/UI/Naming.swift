@@ -36,6 +36,8 @@ public struct CommitCardView: View {
                         if let p = g.product {
                             Text(p.title).fontWeight(.semibold)
                             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else if g.markedUnknown {
+                            Text("\(g.label) (left unknown)").foregroundStyle(.secondary)
                         } else {
                             Text("\(g.label): name it").foregroundStyle(.orange)
                         }

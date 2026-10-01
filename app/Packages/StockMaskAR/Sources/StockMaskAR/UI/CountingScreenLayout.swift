@@ -34,6 +34,9 @@ public struct CountingScreenLayout<Camera: View, HUD: View>: View {
                 } else if let reason = session.pauseReason {
                     BannerView(text: reason)
                 }
+                if let notice = session.notice {
+                    BannerView(text: notice, action: ("OK", { session.notice = nil }))
+                }
                 HStack {
                     if let error = session.lastError {
                         Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(2)
