@@ -17,6 +17,8 @@ LiDAR or ARKit poses:
        owlv2_caps    OWLv2 prompted with "a photo of a bottle cap", each cap counted as a bottle:
                      do the tops of the rows behind the front one count the bottles there?
                      (ADR 006's candidate bottle_top class)
+       rfdetr_ft     RF-DETR fine-tuned on bottle, can, case and bottle_top (ml/train.py), from the checkpoint
+                     in $RFDETR_FT_CHECKPOINT. A top with no counted bottle of its own counts as a bottle.
      A box counts only if it is whole (not cut by the image border), its centre is in the inner
      frame (FR-14) and its score clears the commit threshold (FR-18).
   3. Double counting between commits, in 2D. Shelf fronts are roughly planar, so a homography
@@ -75,12 +77,13 @@ GATE = 0.5  # 1:1 match gate, in box widths / heights (ADR 003: "at most half an
 LONG_GAP_S = 10.0  # a registration onto a commit older than this is listed for a human to check
 DETECTORS = {  # name: (shown, counted) score thresholds; in between = dashed, not counted (FR-18)
     "rfdetr": (0.3, 0.5), "rfdetr_tiled": (0.3, 0.5), "owlv2": (0.2, 0.3), "owlv2_caps": (0.15, 0.2),
-    "oracle": (0.5, 0.5),
+    "rfdetr_ft": (0.3, 0.5), "oracle": (0.5, 0.5),
     # Ultralytics YOLO (AGPL-3.0, ADR 002): cached by research/yolo_eval/run.py, never run from here
     "yolo26n": (0.15, 0.25), "yolo26s": (0.15, 0.25), "yolo11n": (0.15, 0.25), "yolo11s": (0.15, 0.25),
     "yolo26n_seg": (0.15, 0.25), "yoloe26s": (0.15, 0.25), "yoloworld": (0.15, 0.25),
     "yoloe26s_caps": (0.15, 0.2), "yoloe26n_caps": (0.15, 0.2), "yoloworld_caps": (0.15, 0.2),
     "yoloworld_tops": (0.15, 0.2)}
+FT_CHECKPOINT = "RFDETR_FT_CHECKPOINT"  # env var: the fine-tuned RF-DETR checkpoint for rfdetr_ft (ml/train.py)
 OWL_MODEL = "google/owlv2-base-patch16-ensemble"
 OWL_QUERIES = {"bottle": "a photo of a bottle", "can": "a photo of a beverage can",
                "case": "a photo of a cardboard box"}
@@ -372,6 +375,60 @@ class RFDETR:
         return Dets.cat(parts)
 
 
+class RFDETRFineTuned:
+    """RF-DETR fine-tuned on our classes (ml/train.py), from the checkpoint in $RFDETR_FT_CHECKPOINT. Its bottle_top
+    boxes are merged into bottles by the counting rule of docs/mvp-test-app.md (ml/common.py pair_tops): a top in the
+    top region of a counted bottle is that bottle's own top and is dropped; every other top is a bottle in a row behind
+    and is reported as a bottle. Only bottles that reach the commit threshold claim a top. Each class is cleaned on its
+    own before the merge, so clean() can't remove back-row tops that lie inside a front bottle's box."""
+
+    name = "rfdetr_ft"
+
+    def __init__(self):
+        from rfdetr import RFDETR as _RFDETR
+
+        path = os.environ.get(FT_CHECKPOINT)
+        if not path or not os.path.exists(path):
+            raise SystemExit(f"--detectors rfdetr_ft needs ${FT_CHECKPOINT} set to a checkpoint from ml/train.py")
+        self.model = _RFDETR.from_checkpoint(path, trust_checkpoint=True)  # our own training output
+        self.names = list(self.model.class_names)
+
+    def __call__(self, c: Commit) -> Dets:
+        shown, counted = DETECTORS[self.name]
+        r = self.model.predict(np.ascontiguousarray(c.image[..., ::-1]), threshold=shown)
+        known = np.array([k < len(self.names) for k in r.class_id], dtype=bool) if len(r) else np.zeros(0, bool)
+        d = Dets(r.xyxy[known], r.confidence[known], np.array([self.names[k] for k in r.class_id[known]], dtype="<U10"))
+        d = Dets.cat([clean(d.take(d.cls == k)) for k in ("bottle", "can", "case", "bottle_top")])
+        bottle, top = d.cls == "bottle", d.cls == "bottle_top"
+        b, t = d.boxes, d.boxes[top]
+        cand = []  # (distance, bottle index, top index) for tops in a counted bottle's top region
+        for i in np.nonzero(bottle & (d.scores >= counted))[0]:
+            x0, y0, x1, y1 = b[i]
+            h, cx, cy = y1 - y0, (x0 + x1) / 2, y0 + 0.06 * (y1 - y0)
+            for j, (tx, ty) in enumerate(zip((t[:, 0] + t[:, 2]) / 2, (t[:, 1] + t[:, 3]) / 2)):
+                if x0 <= tx <= x1 and y0 - 0.05 * h <= ty <= y0 + 0.25 * h:
+                    cand.append((math.hypot(tx - cx, ty - cy) / max(1.0, x1 - x0), i, j))
+        own, used = set(), set()
+        for _, i, j in sorted(cand):
+            if i not in used and j not in own:
+                used.add(i)
+                own.add(j)
+        keep = ~top
+        keep[np.nonzero(top)[0][[j for j in range(int(top.sum())) if j not in own]]] = True
+        out = d.take(keep)
+        return Dets(out.boxes, out.scores, np.where(out.cls == "bottle_top", "bottle", out.cls).astype("<U6"))
+
+
+def checkpoint_tag(name: str) -> str:
+    """Part of the detection cache's folder name: rfdetr_ft's cache belongs to one checkpoint file."""
+    if name != "rfdetr_ft" or not os.path.exists(os.environ.get(FT_CHECKPOINT, "")):
+        return ""
+    import hashlib
+
+    with open(os.environ[FT_CHECKPOINT], "rb") as f:
+        return "-" + hashlib.sha1(f.read()).hexdigest()[:10]
+
+
 class OWLv2:
     """OWLv2 (Apache-2.0), open vocabulary: the pre-labeller named in ADR 006. With caps=True it
     looks for bottle caps only, and each cap counts as one bottle."""
@@ -437,6 +494,8 @@ def make_detector(name: str, truth_path: str | None):
         return OWLv2()
     if name == "owlv2_caps":
         return OWLv2(caps=True)
+    if name == "rfdetr_ft":
+        return RFDETRFineTuned()
     if name == "oracle":
         if not truth_path or not os.path.exists(truth_path):
             raise SystemExit("--detectors oracle needs the synthetic video's .truth.json (make_test_video.py)")
@@ -963,7 +1022,7 @@ def report(args, video, commits, holds, per, dets, truth, view_truth, out, secon
           "|---|---|---|---|---|" + ("---|---|" if truth else "")]
     for name, rs in per.items():
         for cl in CLASSES:
-            if (name.startswith("rfdetr") or name == "owlv2_caps") and cl != "bottle":
+            if name in ("rfdetr", "rfdetr_tiled", "owlv2_caps") and cl != "bottle":
                 continue
             naive = sum(int(((d.cls == cl) & (d.scores >= DETECTORS[name][1])
                              & (view_status(d.boxes, *c.image.shape[1::-1], args.band_px) == "inner")).sum())
@@ -1113,7 +1172,7 @@ def main():
                          f"{os.path.splitext(os.path.basename(args.video))[0]}-{os.path.getsize(args.video)}")
     for name in names:
         t1, det, dets[name] = time.time(), None, []
-        folder = os.path.join(cache, f"{name}-{DETECTORS[name][0]:g}")
+        folder = os.path.join(cache, f"{name}{checkpoint_tag(name)}-{DETECTORS[name][0]:g}")
         if name != "oracle":
             os.makedirs(folder, exist_ok=True)
         for c in commits:
@@ -1126,7 +1185,7 @@ def main():
                 d = det(c)
                 if name != "oracle":
                     np.savez(f, boxes=d.boxes, scores=d.scores, cls=d.cls)
-            dets[name].append(d if name == "oracle" else clean(d))
+            dets[name].append(d if name in ("oracle", "rfdetr_ft") else clean(d))  # rfdetr_ft cleans per class itself
         print(f"{name}: {sum(len(d.scores) for d in dets[name])} boxes ({time.time() - t1:.0f} s)", flush=True)
         del det
     t1 = time.time()

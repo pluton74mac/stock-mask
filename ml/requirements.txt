@@ -1,0 +1,16 @@
+# ml/: frames, OWLv2 pre-labels, RF-DETR training and evaluation. Python 3.11, macOS (MPS) or Linux.
+# Label Studio has its own venv and file: requirements-labelstudio.txt.
+#   uv venv --python 3.11 ml/.venv
+#   uv pip install --python ml/.venv/bin/python -r ml/requirements.txt
+# The pins match research/walkthrough/requirements.txt, so a checkpoint trained here loads in the walkthrough
+# replay's venv (rfdetr 1.11.0 without the training extras).
+torch==2.7.0
+torchvision==0.22.0
+rfdetr[train]==1.11.0
+transformers==5.17.0
+supervision==0.30.5
+opencv-python-headless==5.0.0.93
+numpy==2.4.6
+scipy==1.17.1
+matplotlib==3.11.2
+pillow==12.3.0

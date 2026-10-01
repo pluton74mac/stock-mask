@@ -130,6 +130,10 @@ A 34 s clip with 12 commits took 1.4 minutes.
    - `yolo26n`, `yolo26s`, `yoloe26s_caps` and the other `yolo*` names: Ultralytics models (AGPL-3.0),
      which this script never runs. [`../yolo_eval/run.py`](../yolo_eval/run.py) puts their detections in
      the cache first, from its own venv ([`../yolo_eval/RESULTS.md`](../yolo_eval/RESULTS.md)).
+   - `rfdetr_ft` (not in the default set): RF-DETR fine-tuned by `ml/train.py` on `bottle`, `can`,
+     `case` and `bottle_top`. Point `RFDETR_FT_CHECKPOINT` at the checkpoint. Tops are merged into
+     bottles by the app's rule: a top in a counted bottle's top region is that bottle; any other top
+     counts as a bottle in a row behind. Its detection cache is kept per checkpoint file.
    - What counts: a box counts only if it is whole (not cut by the border), its centre is in the
      inner frame (FR-14), and its score clears the commit threshold (FR-18).
 3. **Double counting between commits, in 2D.** Shelf fronts are roughly flat, so a homography
