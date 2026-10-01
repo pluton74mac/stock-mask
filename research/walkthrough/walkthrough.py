@@ -7,12 +7,16 @@ LiDAR or ARKit poses:
   1. Hold-to-count (FR-13, ADR 003). Image motion from optical flow is turned into an angular
      speed with the camera's field of view. Causal, like the app: a commit fires once the view has
      stayed under 10 deg/s for 0.8 s, then re-arms after the view has moved 5 deg. The keyframe
-     is the sharpest frame of the hold.
+     is the sharpest frame of the hold. Walks that never stop can use --sweep instead (a commit
+     per half view moved) or --every (one per N seconds).
   2. Detection at each commit.
        rfdetr        RF-DETR Nano, COCO weights (bottles only: COCO has no can or case). This is
                      P0-3's "COCO weights first", on the detector ADR 002 chose.
        rfdetr_tiled  the same model on overlapping tiles too: is it the model or the 384 px input?
        owlv2         OWLv2 prompted with bottle / can / cardboard box: the ADR 006 pre-labeller.
+       owlv2_caps    OWLv2 prompted with "a photo of a bottle cap", each cap counted as a bottle:
+                     do the tops of the rows behind the front one count the bottles there?
+                     (ADR 006's candidate bottle_top class)
      A box counts only if it is whole (not cut by the image border), its centre is in the inner
      frame (FR-14) and its score clears the commit threshold (FR-18).
   3. Double counting between commits, in 2D. Shelf fronts are roughly planar, so a homography
@@ -21,7 +25,9 @@ LiDAR or ARKit poses:
      auto-added inside counted zones (a "possible miss" instead). This is a stand-in for the 3D
      design, not the design itself: parallax breaks it, and look-alike racks (the same products on
      another rack) can fool it, as they fool relocalisation. Two guards reject look-alikes, and the
-     report lists what they rejected and every registration onto a much earlier commit.
+     report lists what they rejected and every registration onto a much earlier commit. For
+     footage filmed close up while walking, --carry track carries counted items through the video
+     by optical flow instead (count_tracked).
   4. Frame conditions per commit: dark, blurry, clipped highlights (PRD section 9 hints).
 
 Outputs, in --out: report.md, summary.json, timeline.png, contact sheets, an annotated image per
@@ -40,6 +46,7 @@ import datetime
 import json
 import math
 import os
+import platform
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -58,6 +65,8 @@ EDGE = 0.005  # a box this close to the image border (fraction of the long side)
 MOTION_SIDE = 640  # long side of the frames used for motion and frame quality
 KEY_SIDE = 1920  # long side of stored keyframes (ARKit's captured image is 1920 x 1440)
 FEATURE_SIDE = 1280  # long side for SIFT registration between keyframes
+FLOW_SIDE = 640  # long side of the frames for dense optical flow (--carry track)
+DEAD_RECKON_S = 3.0  # an item or zone out of view follows the frame's global motion this long (--carry track)
 MIN_INLIERS = 40  # homography inliers needed to call two keyframes registered
 MIN_COVERAGE = 0.08  # ... and the share of the features in the claimed overlap that they explain.
 # Look-alike shelves (the same products on another rack) give a few dozen consistent matches but
@@ -65,10 +74,12 @@ MIN_COVERAGE = 0.08  # ... and the share of the features in the claimed overlap 
 GATE = 0.5  # 1:1 match gate, in box widths / heights (ADR 003: "at most half an item width")
 LONG_GAP_S = 10.0  # a registration onto a commit older than this is listed for a human to check
 DETECTORS = {  # name: (shown, counted) score thresholds; in between = dashed, not counted (FR-18)
-    "rfdetr": (0.3, 0.5), "rfdetr_tiled": (0.3, 0.5), "owlv2": (0.2, 0.3), "oracle": (0.5, 0.5)}
+    "rfdetr": (0.3, 0.5), "rfdetr_tiled": (0.3, 0.5), "owlv2": (0.2, 0.3), "owlv2_caps": (0.15, 0.2),
+    "oracle": (0.5, 0.5)}
 OWL_MODEL = "google/owlv2-base-patch16-ensemble"
 OWL_QUERIES = {"bottle": "a photo of a bottle", "can": "a photo of a beverage can",
                "case": "a photo of a cardboard box"}
+OWL_CAP_QUERY = "a photo of a bottle cap"  # 0.2 came within 12% of the tops counted by eye in six bay views
 # BGR colours in the visual language of PRD section 9
 GREEN, AMBER, YELLOW, GREY, WHITE, BLACK = (70, 200, 60), (0, 165, 255), (0, 225, 255), (150, 150, 150), \
     (255, 255, 255), (0, 0, 0)
@@ -169,15 +180,21 @@ def image_motion(prev: np.ndarray, cur: np.ndarray):
 
 
 def replay(path: str, hfov=HFOV_DEG, hold=HOLD_S, max_speed=MAX_DEG_S, rearm=REARM_DEG, every=None,
-           start=0.0, end=None):
+           start=0.0, end=None, sweep=None, sweep_speed=None, fallback=None):
     """Run the video through the hold-to-count trigger, frame by frame, the way the app would.
-    With `every`, ignore holds and commit the sharpest frame of every `every` seconds instead, for
-    walks filmed without pausing."""
+    For walks filmed without pausing, two alternatives ignore holds. With `every`, commit the sharpest
+    frame of every `every` seconds. With `sweep`, commit each time the view has advanced `sweep` of a
+    frame since the last keyframe: the sharpest frame of the second half of that advance. The overlap
+    between neighbouring commits then stays near 1 - `sweep`. With `sweep_speed`, only frames slower
+    than that (deg/s) can be keyframes: past the goal, the commit waits for the view to slow down.
+    With `fallback`, hold-to-count stays the trigger, and the sweep rule is its safety net: a view
+    passed without a hold still commits once the view has advanced `fallback` of a frame since the
+    last keyframe (flagged "no hold")."""
     track = collections.defaultdict(list)
     commits, holds = [], []  # holds: every stretch under the speed limit, for the timeline
     prev = run_from = since = timed = None
     window = collections.deque()  # (sharpness, index, t, keyframe, luma, clipped) over the current hold
-    armed, moved, lost = True, np.zeros(2), False
+    armed, moved, lost, shift = True, np.zeros(2), False, np.zeros(2)
     for fps, i, t, frame in read_video(path, start, end):
         if prev is None:
             h, w = frame.shape[:2]
@@ -195,6 +212,7 @@ def replay(path: str, hfov=HFOV_DEG, hold=HOLD_S, max_speed=MAX_DEG_S, rearm=REA
         speed = float(np.median(speeds))
         steady = speed < max_speed
         moved += vec
+        shift += vec  # image shift since the last keyframe (sweep), in motion-frame pixels
         lost |= prev is not None and not math.isfinite(px)
         for k, v in (("t", t), ("speed", speed), ("luma", luma), ("sharp", sharp)):
             track[k].append(v)
@@ -205,12 +223,23 @@ def replay(path: str, hfov=HFOV_DEG, hold=HOLD_S, max_speed=MAX_DEG_S, rearm=REA
             run_from = None
         keyframe = lambda: frame.copy() if s_key == 1.0 else cv2.resize(  # noqa: E731
             frame, None, fx=s_key, fy=s_key, interpolation=cv2.INTER_AREA)
-        fire = None
+        fire, no_hold = None, False
         if every:
             if timed is None or sharp > timed[0]:
                 timed = (sharp, i, t, keyframe(), luma, clipped)
             if t - win_from >= every - 1e-6:
                 fire, win_from, timed = (timed, win_from), t, None
+        elif sweep:
+            gh, gw = grey.shape
+            advance = 1 - max(0.0, 1 - abs(shift[0]) / gw) * max(0.0, 1 - abs(shift[1]) / gh)  # 1 - overlap
+            goal = sweep if commits else sweep / 2  # the first view: the sharpest frame of the first half-step
+            slow = sweep_speed is None or speed < sweep_speed
+            if advance >= goal - sweep / 2 and slow and (timed is None or sharp > timed[0]):
+                timed = (sharp, i, t, keyframe(), luma, clipped, shift.copy())
+            if advance >= goal and timed is not None:
+                fire = (timed[:6], win_from)
+                shift -= timed[6]  # the next advance counts from the keyframe, not from this frame
+                win_from, timed = timed[2], None
         else:
             if not armed and (not math.isfinite(px) or degrees(moved) >= rearm):
                 armed = True  # the view has changed: the hold timer starts again from here
@@ -228,11 +257,25 @@ def replay(path: str, hfov=HFOV_DEG, hold=HOLD_S, max_speed=MAX_DEG_S, rearm=REA
             else:
                 since = None
                 window.clear()
+            if fallback and fire:  # the view stood still at the hold's keyframe: the next advance counts from there
+                shift, timed = np.zeros(2), None
+            elif fallback:  # passed without a hold: the sweep rule commits it anyway
+                gh, gw = grey.shape
+                advance = 1 - max(0.0, 1 - abs(shift[0]) / gw) * max(0.0, 1 - abs(shift[1]) / gh)
+                slow = sweep_speed is None or speed < sweep_speed
+                if advance >= fallback / 2 and slow and (timed is None or sharp > timed[0]):
+                    timed = (sharp, i, t, keyframe(), luma, clipped, shift.copy())
+                if advance >= fallback and timed is not None and not steady:  # a hold under way commits itself
+                    fire, no_hold = (timed[:6], timed[2]), True
+                    shift -= timed[6]
+                    timed = None
         if fire:
             (sharp_k, i_k, t_k, key, luma_k, clipped_k), from_ = fire
             commits.append(Commit(len(commits) + 1, t, from_, i_k, t_k, key, s_key,
-                                  math.nan if (lost or not commits) else degrees(moved), luma_k, clipped_k, sharp_k))
-            armed, moved, lost = False, np.zeros(2), False
+                                  math.nan if (lost or not commits) else degrees(moved), luma_k, clipped_k, sharp_k,
+                                  ["no hold"] if no_hold else []))
+            # a fallback commit leaves the hold rule armed: a hold that follows it still commits
+            armed, moved, lost = armed and no_hold, np.zeros(2), False
         prev, t_prev = grey, t
     if run_from is not None:
         holds.append((run_from, t_prev))
@@ -325,31 +368,36 @@ class RFDETR:
 
 
 class OWLv2:
-    """OWLv2 (Apache-2.0), open vocabulary: the pre-labeller named in ADR 006."""
+    """OWLv2 (Apache-2.0), open vocabulary: the pre-labeller named in ADR 006. With caps=True it
+    looks for bottle caps only, and each cap counts as one bottle."""
 
-    name = "owlv2"
-
-    def __init__(self):
+    def __init__(self, caps=False):
         import torch
         from transformers import Owlv2ForObjectDetection, Owlv2Processor
 
-        self.torch = torch
+        self.torch, self.caps = torch, caps
+        self.name = "owlv2_caps" if caps else "owlv2"
+        # a GPU when there is one: about 13x faster on an Apple M5 (MPS), same boxes (scores within 1e-4)
+        self.device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
         self.proc = Owlv2Processor.from_pretrained(OWL_MODEL)
-        self.model = Owlv2ForObjectDetection.from_pretrained(OWL_MODEL).eval()
+        self.model = Owlv2ForObjectDetection.from_pretrained(OWL_MODEL).eval().to(self.device)
 
     def __call__(self, c: Commit) -> Dets:
         from PIL import Image
 
         h, w = c.image.shape[:2]
-        inputs = self.proc(text=[[OWL_QUERIES[k] for k in CLASSES]], images=Image.fromarray(c.image[..., ::-1]),
-                           return_tensors="pt")
+        queries = [OWL_CAP_QUERY] if self.caps else [OWL_QUERIES[k] for k in CLASSES]
+        inputs = self.proc(text=[queries], images=Image.fromarray(c.image[..., ::-1]),
+                           return_tensors="pt").to(self.device)
         with self.torch.no_grad():
             out = self.model(**inputs)
         side = max(h, w)  # OWLv2 pads to a square before resizing, so boxes are relative to that square
         r = self.proc.image_processor.post_process_object_detection(out, threshold=DETECTORS[self.name][0],
                                                                      target_sizes=[(side, side)])[0]
-        boxes = np.clip(r["boxes"].numpy(), 0, [w, h, w, h])
-        return Dets(boxes, r["scores"].numpy(), np.array(CLASSES)[r["labels"].numpy()])
+        boxes = np.clip(r["boxes"].cpu().numpy(), 0, [w, h, w, h])
+        labels = r["labels"].cpu().numpy()
+        cls = np.full(len(labels), "bottle") if self.caps else np.array(CLASSES)[labels]
+        return Dets(boxes, r["scores"].cpu().numpy(), cls)
 
 
 class Oracle:
@@ -382,6 +430,8 @@ def make_detector(name: str, truth_path: str | None):
         return RFDETR(tiled=True)
     if name == "owlv2":
         return OWLv2()
+    if name == "owlv2_caps":
+        return OWLv2(caps=True)
     if name == "oracle":
         if not truth_path or not os.path.exists(truth_path):
             raise SystemExit("--detectors oracle needs the synthetic video's .truth.json (make_test_video.py)")
@@ -582,6 +632,157 @@ def count_2d(commits: list, dets: list, reg: Registration, thr: float, band_px: 
     return out
 
 
+def global_motion(flow: np.ndarray, step: int = 16):
+    """The frame-to-frame similarity transform that explains most of a dense flow field (RANSAC), as a
+    3 x 3 matrix, or None. A similarity, not a homography: chained over seconds, per-frame perspective
+    terms blow up."""
+    h, w = flow.shape[:2]
+    ys, xs = np.mgrid[step // 2:h:step, step // 2:w:step]
+    p = np.stack([xs.ravel(), ys.ravel()], 1).astype(np.float32)
+    M, mask = cv2.estimateAffinePartial2D(p, p + flow[ys.ravel(), xs.ravel()], method=cv2.RANSAC,
+                                          ransacReprojThreshold=1.0)
+    return None if M is None or mask.sum() < 0.3 * len(p) else np.vstack([M, [0, 0, 1]])
+
+
+def box_flow(flow: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Median flow over the central half of a box: the item's own motion, parallax included."""
+    h, w = flow.shape[:2]
+    cx, cy, bw, bh = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2, b[2] - b[0], b[3] - b[1]
+    x0, x1 = int(max(0, cx - bw / 4)), int(min(w, cx + bw / 4 + 1))
+    y0, y1 = int(max(0, cy - bh / 4)), int(min(h, cy + bh / 4 + 1))
+    return np.median(flow[y0:y1, x0:x1].reshape(-1, 2), axis=0) if x1 > x0 and y1 > y0 else np.zeros(2)
+
+
+def zone_transform(z: dict, items: list, t: float):
+    """Where a counted zone is now, as a 3 x 3 transform from where it was at its commit. A zone lies at
+    its items' depth (ADR 003), so the transform is fitted to its own counted items as they are followed
+    now; with none of them followed, the frame's global motion carries it for up to DEAD_RECKON_S.
+    None: the zone is lost (a registered revisit can still bring it back)."""
+    now = [(b, items[j]["box"]) for j, b in zip(z["members"], z["base"]) if items[j]["box"] is not None]
+    if len(now) >= 4:  # enough items for rotation and scale; a few close items make them up
+        src, dst = (np.float32([centres(x[None])[0] for x in col]) for col in zip(*now))
+        size = float(np.median([b[2] - b[0] for b, _ in now]))
+        M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=max(2.0, size / 2))
+        if M is not None and 2 / 3 < math.hypot(M[0, 0], M[1, 0]) < 1.5 and abs(math.atan2(M[1, 0], M[0, 0])) < 0.26:
+            return np.vstack([M, [0, 0, 1]])
+    if now:
+        dx, dy = np.median([centres(c[None])[0] - centres(b[None])[0] for b, c in now], axis=0)
+        return np.array([[1, 0, dx], [0, 1, dy], [0, 0, 1]])
+    return z["A"] if t - z["t"] <= DEAD_RECKON_S else None
+
+
+def count_tracked(path: str, start: float, end, commits: list, dets: dict, reg: Registration, band_px: float) -> dict:
+    """Strategy S5 again, but with counted items carried through the video between commits instead of
+    registered between keyframes. This is the 2D stand-in closest to the app, where ARKit tracks the
+    camera continuously: frame-to-frame motion is small, so blur and a moving camera don't break it.
+      - Dense optical flow moves each counted item in view by the flow inside its own box, so rows at
+        different depths keep their own parallax.
+      - An item out of view follows the frame's global motion for up to DEAD_RECKON_S, like an anchor
+        with no new observation, then only a registered revisit (count_2d's keyframe homographies) can
+        bring it back.
+      - A counted zone follows its own items (zone_transform).
+    One pass over the video serves every detector: returns {detector: per-commit results}, in
+    count_2d's format."""
+    at = {c.frame: k for k, c in enumerate(commits)}
+    dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_FAST)
+    state = {name: dict(items=[], zones=[], out=[]) for name in dets}
+    prev = prev_frame = None
+    for _, i, t, frame in read_video(path, start, end):
+        if i < commits[0].frame:
+            continue
+        if prev is None:
+            s_flow = FLOW_SIDE / max(frame.shape[:2])
+        grey = cv2.cvtColor(cv2.resize(frame, None, fx=s_flow, fy=s_flow, interpolation=cv2.INTER_AREA),
+                            cv2.COLOR_BGR2GRAY)
+        fh, fw = grey.shape
+        full = quad(0, 0, fw, fh)
+        if prev is not None:
+            flow = dis.calc(prev, grey, None)
+            G = global_motion(flow)
+            if G is not None and prev_frame is not None:
+                prev_frame = cv2.perspectiveTransform(prev_frame, G)
+            for st in state.values():
+                for it in st["items"]:
+                    b = it["box"]
+                    if b is None:
+                        continue
+                    if 0 <= (b[0] + b[2]) / 2 < fw and 0 <= (b[1] + b[3]) / 2 < fh:
+                        it["box"], it["t"] = b + np.tile(box_flow(flow, b), 2), t
+                    elif t - it["t"] > DEAD_RECKON_S:
+                        it["box"] = None
+                    elif G is not None:
+                        it["box"] = warp_boxes(b[None], G)[0]
+                for z in st["zones"]:
+                    if G is not None:
+                        z["A"] = G @ z["A"]
+                    if any(st["items"][j]["box"] is not None for j in z["members"]):
+                        z["t"] = t
+        prev = grey
+        if i in at:
+            k, cm = at[i], commits[at[i]]
+            h, w = cm.image.shape[:2]
+            f2k = cm.scale / s_flow  # flow pixels to keyframe pixels
+            links, rejected = consistent_links(reg, k, w, h)
+            linked = {c: (Hc, inl) for c, Hc, inl, _ in links}
+            inner = quad(band_px, band_px, w - band_px, h - band_px)
+            overlap_prev = None if prev_frame is None else round(overlap_area(prev_frame, full) / (fw * fh), 2)
+            for name, st in state.items():
+                d, items = dets[name][k], st["items"]
+                where = view_status(d.boxes, w, h, band_px)
+                status = np.where(d.scores < DETECTORS[name][1], "low", np.where(where == "cut", "cut", "")).astype("<U4")
+                carried, idx, tracked = [], [], 0
+                for j, it in enumerate(items):
+                    if it["box"] is not None:
+                        carried.append(it["box"] * f2k)
+                        idx.append(j)
+                        tracked += 1
+                        continue
+                    options = [(linked[c][1], c) for c in it["seen"] if c in linked]
+                    if options:
+                        c = max(options)[1]
+                        carried.append(warp_boxes(it["seen"][c][None], linked[c][0])[0])
+                        idx.append(j)
+                followed, zones, zones_from = [], [], []
+                for z in st["zones"]:
+                    T = zone_transform(z, items, t)
+                    if T is not None:
+                        followed.append(z)
+                        zones.append((cv2.perspectiveTransform(z["q0"], T) * f2k).astype(np.float32))
+                        zones_from.append(z["k"])
+                st["zones"] = followed
+                for c, Hc, _, _ in links:
+                    if c not in zones_from:
+                        zones.append(cv2.perspectiveTransform(inner, Hc))
+                        zones_from.append(c)
+                live = np.nonzero(status == "")[0]
+                m = match(d.take(live), np.array(carried).reshape(-1, 4), np.array([items[j]["cls"] for j in idx]))
+                members = []
+                for di, mi in zip(live, m):
+                    cx, cy = centres(d.boxes[di:di + 1])[0]
+                    if mi >= 0:
+                        status[di] = "seen"
+                        it = items[idx[mi]]
+                        it["seen"][k], it["box"], it["t"] = d.boxes[di], d.boxes[di] / f2k, t  # re-observed
+                        members.append(idx[mi])
+                    elif any(cv2.pointPolygonTest(z, (float(cx), float(cy)), False) >= 0 for z in zones):
+                        status[di] = "miss"
+                    elif where[di] == "inner":
+                        status[di] = "new"
+                        items.append(dict(cls=str(d.cls[di]), seen={k: d.boxes[di]}, box=d.boxes[di] / f2k, t=t))
+                        members.append(len(items) - 1)
+                    else:
+                        status[di] = "edge"
+                st["zones"].append(dict(k=k, q0=(inner / f2k).astype(np.float32), members=members,
+                                        base=[items[j]["box"].copy() for j in members], A=np.eye(3), t=t))
+                st["out"].append(dict(status=status, zones=zones, links=[(c, inl, ov) for c, _, inl, ov in links],
+                                      rejected=rejected, overlap_prev=overlap_prev, tracked=tracked,
+                                      carried=np.array(carried).reshape(-1, 4), zones_from=zones_from))
+            prev_frame = full.copy()
+            if k == len(commits) - 1:
+                break
+    return {name: st["out"] for name, st in state.items()}
+
+
 # ---------------------------------------------------------------------------------------------
 # 4. Pictures and report
 
@@ -702,11 +903,24 @@ def report(args, video, commits, holds, per, dets, truth, view_truth, out, secon
     view_short = 2 * math.degrees(math.atan(short * math.tan(math.radians(args.hfov) / 2)))
     rule = (f"Timed commits: the sharpest frame of every {args.every:g} s; hold-to-count is off for this run."
             if args.every else
+            f"Sweep commits: one each time the view has advanced {100 * args.sweep:g}% of a frame since the last "
+            "keyframe (the sharpest frame of the second half of that advance), "
+            + (f"only from frames slower than {args.sweep_speed:g}°/s" if args.sweep_speed else "at any speed")
+            + "; hold-to-count is off for this run." if args.sweep else
             f"Commit rule: view under {args.max_speed:g}°/s for {args.hold:g} s; the next commit needs the view to "
-            f"move {args.rearm:g}° first.")
+            f"move {args.rearm:g}° first."
+            + (f" Fallback: a view passed without a hold commits anyway once the view has advanced "
+               f"{100 * args.fallback:g}% of a frame since the last keyframe (the sharpest frame of the second half of "
+               "that advance" + (f", only from frames slower than {args.sweep_speed:g}°/s" if args.sweep_speed else "")
+               + "), flagged \"no hold\"." if args.fallback else ""))
+    defaults = dict(hfov=HFOV_DEG, band=BAND)
+    flags = "".join(f" --{k} {v:g}" for k, v in (("hfov", args.hfov), ("every", args.every), ("sweep", args.sweep),
+                                                  ("fallback", args.fallback), ("sweep-speed", args.sweep_speed),
+                                                  ("band", args.band), ("start", args.start), ("end", args.end))
+                    if v and v != defaults.get(k)) + (" --carry track" if args.carry == "track" else "")
     L = [f"# Walkthrough replay: `{video['file']}`", "",
          f"Generated {datetime.date.today()} by `python walkthrough.py {os.path.basename(args.video)}"
-         f" --detectors {args.detectors}{f' --every {args.every:g}' if args.every else ''}` in {seconds / 60:.1f} min. "
+         f" --detectors {args.detectors}{flags}` in {seconds / 60:.1f} min. "
          "What StockMask's counting loop would have done with this video, minus everything that needs LiDAR or "
          "ARKit (see the end).", "",
          "## Video", "", "| length | size | frame rate | frames | format |", "|---|---|---|---|---|",
@@ -727,19 +941,22 @@ def report(args, video, commits, holds, per, dets, truth, view_truth, out, secon
           f"{np.percentile(steps, 90):.0f}°). ADR 003 assumes about half a view, here about {view_short / 2:.0f}°."
           if len(steps) else "- View step between commits: not enough commits.",
           f"- Keyframe flags: {', '.join(f'{k} ×{v}' for k, v in collections.Counter(f for c in commits for f in c.flags).items()) or 'none'}"
-          " (dark: mean grey < 50; blurry: sharpness < 35% of the median commit; glare: > 2% of pixels clipped).",
+          " (dark: mean grey < 50; blurry: sharpness < 35% of the median commit; glare: > 2% of pixels clipped"
+          + ("; no hold: committed by the fallback" if args.fallback else "") + ").",
           "", "![timeline](timeline.png)", ""]
     L += ["## Counts", "",
           "Per detector: the sum of every commit's count (what the app would add with no memory of earlier "
-          "commits), then the count after 2D matching between commits (ADR 003 S5, with homographies standing in "
-          "for ARKit anchors). Possible misses are detections inside an already counted zone that match nothing: "
+          "commits), then the count after 2D matching between commits (ADR 003 S5, with "
+          + ("counted items carried through the video by optical flow standing in for ARKit tracking, and keyframe "
+             "homographies for revisits" if args.carry == "track" else "homographies standing in for ARKit anchors")
+          + "). Possible misses are detections inside an already counted zone that match nothing: "
           "the app would ask, not add.", "",
           "| detector | class | sum of per-commit counts | after matching | possible misses |"
           + (" truth | error after matching |" if truth else ""),
           "|---|---|---|---|---|" + ("---|---|" if truth else "")]
     for name, rs in per.items():
         for cl in CLASSES:
-            if name.startswith("rfdetr") and cl != "bottle":
+            if (name.startswith("rfdetr") or name == "owlv2_caps") and cl != "bottle":
                 continue
             naive = sum(int(((d.cls == cl) & (d.scores >= DETECTORS[name][1])
                              & (view_status(d.boxes, *c.image.shape[1::-1], args.band_px) == "inner")).sum())
@@ -811,7 +1028,7 @@ def report(args, video, commits, holds, per, dets, truth, view_truth, out, secon
           "- **The detector we will ship.** RF-DETR Nano here has COCO weights and knows only `bottle`. "
           "Fine-tuning on our own labelled storeroom images comes first (P0-7, gate G2). OWLv2 is far too slow for "
           "the phone; it is here as the pre-labeller.",
-          "- **Speed, heat, battery on the phone** (G3): this ran on a Linux CPU.",
+          f"- **Speed, heat, battery on the phone** (G3): this ran on a {platform.system()} {platform.machine()} CPU.",
           "- **How a person holds a phone when the app is guiding them.** The walk was filmed without the app, so "
           "the holds are whatever the camera person did.", "",
           "`cvat/` holds the keyframes and the OWLv2 boxes as COCO pre-labels: correct them in CVAT and they are the "
@@ -848,19 +1065,32 @@ def main():
     ap.add_argument("--rearm", type=float, default=REARM_DEG, help="degrees the view must move between commits")
     ap.add_argument("--every", type=float, help="ignore holds: commit the sharpest frame of every N seconds "
                                                 "(for a walk filmed without pausing)")
+    ap.add_argument("--sweep", type=float, help="ignore holds: commit each time the view has advanced this fraction "
+                                                "of a frame, e.g. 0.5 (for a walk filmed without pausing)")
+    ap.add_argument("--sweep-speed", type=float, help="with --sweep or --fallback: only frames slower than this "
+                                                      "(deg/s) can be keyframes")
+    ap.add_argument("--fallback", type=float, help="with hold-to-count: a view passed without a hold still commits "
+                                                   "once the view has advanced this fraction of a frame, e.g. 0.7")
     ap.add_argument("--band", type=float, default=BAND, help="edge band per side, fraction of the short side")
+    ap.add_argument("--carry", choices=("homography", "track"), default="homography",
+                    help="how counted items reach later commits: keyframe homographies, or tracked through the "
+                         "video by optical flow (for close, moving cameras)")
     ap.add_argument("--start", type=float, default=0.0, help="seconds to skip")
     ap.add_argument("--end", type=float, help="stop at this second")
     ap.add_argument("--truth", help="true totals for what the video covers, e.g. bottle=120,can=0,case=8")
     ap.add_argument("--view-truth", help="CSV with columns commit,class,count: true counts inside the dashed "
                                          "frame of some commits")
     args = ap.parse_args()
+    if args.every and args.sweep:
+        raise SystemExit("--every and --sweep are alternatives: choose one")
+    if args.fallback and (args.every or args.sweep):
+        raise SystemExit("--fallback backs up hold-to-count: use it without --every and --sweep")
     t0 = time.time()
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "out",
                                    os.path.splitext(os.path.basename(args.video))[0])
     os.makedirs(out, exist_ok=True)
     video, commits, holds, track = replay(args.video, args.hfov, args.hold, args.max_speed, args.rearm, args.every,
-                                          args.start, args.end)
+                                          args.start, args.end, args.sweep, args.sweep_speed, args.fallback)
     print(f"{video['frames']} frames, {video['seconds']:.0f} s: {len(commits)} commits ({time.time() - t0:.0f} s)",
           flush=True)
     plot_timeline(track, holds, commits, os.path.join(out, "timeline.png"), args.max_speed)
@@ -871,16 +1101,34 @@ def main():
     names = [s.strip() for s in args.detectors.split(",") if s.strip()]
     truth_path = os.path.splitext(args.video)[0] + ".truth.json"
     dets = {}
+    # raw detections per keyframe, reused by later runs over the same video (other triggers, other carry)
+    cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", ".detcache",
+                         f"{os.path.splitext(os.path.basename(args.video))[0]}-{os.path.getsize(args.video)}")
     for name in names:
-        t1 = time.time()
-        det = make_detector(name, truth_path)
-        dets[name] = [det(c) if name == "oracle" else clean(det(c)) for c in commits]
+        t1, det, dets[name] = time.time(), None, []
+        folder = os.path.join(cache, f"{name}-{DETECTORS[name][0]:g}")
+        if name != "oracle":
+            os.makedirs(folder, exist_ok=True)
+        for c in commits:
+            f = os.path.join(folder, f"{c.frame}.npz")
+            if name != "oracle" and os.path.exists(f):
+                z = np.load(f)
+                d = Dets(z["boxes"], z["scores"], z["cls"])
+            else:
+                det = det or make_detector(name, truth_path)
+                d = det(c)
+                if name != "oracle":
+                    np.savez(f, boxes=d.boxes, scores=d.scores, cls=d.cls)
+            dets[name].append(d if name == "oracle" else clean(d))
         print(f"{name}: {sum(len(d.scores) for d in dets[name])} boxes ({time.time() - t1:.0f} s)", flush=True)
         del det
     t1 = time.time()
     reg = Registration([c.image for c in commits])
-    per = {name: count_2d(commits, dets[name], reg, DETECTORS[name][1], args.band_px) for name in names}
-    print(f"2D matching ({time.time() - t1:.0f} s)", flush=True)
+    if args.carry == "track":
+        per = count_tracked(args.video, args.start, args.end, commits, dets, reg, args.band_px)
+    else:
+        per = {name: count_2d(commits, dets[name], reg, DETECTORS[name][1], args.band_px) for name in names}
+    print(f"2D matching, carry {args.carry} ({time.time() - t1:.0f} s)", flush=True)
     for name in names:
         os.makedirs(os.path.join(out, "commits", name), exist_ok=True)
         pics = []
@@ -900,7 +1148,9 @@ def main():
             view_truth[(int(row["commit"]), row["class"].strip())] = int(row["count"])
     report(args, video, commits, holds, per, dets, parse_truth(args.truth), view_truth, out, time.time() - t0)
     summary = dict(video=video, settings=dict(hfov=args.hfov, hold=args.hold, max_speed=args.max_speed,
-                                              rearm=args.rearm, every=args.every, band=args.band,
+                                              rearm=args.rearm, every=args.every, sweep=args.sweep,
+                                              sweep_speed=args.sweep_speed, fallback=args.fallback, band=args.band,
+                                              carry=args.carry, start=args.start, end=args.end,
                                               detectors=names),
                    holds=[[round(a, 3), round(b, 3)] for a, b in holds],
                    commits=[dict(n=c.n, t=round(c.t, 3), hold_from=round(c.hold_from, 3), frame=c.frame,
@@ -908,6 +1158,7 @@ def main():
                                  luma=round(c.luma, 1), clipped=round(c.clipped, 4), flags=c.flags,
                                  detections={name: dict(collections.Counter(per[name][k]["status"].tolist()))
                                              for name in names},
+                                 overlap_prev=per[names[0]][k]["overlap_prev"],
                                  links=[[commits[a].n, inl, round(ov, 3)] for a, inl, ov in per[names[0]][k]["links"]],
                                  rejected=[[commits[a].n, inl, commits[b].n] for a, inl, b in per[names[0]][k]["rejected"]])
                             for k, c in enumerate(commits)],
