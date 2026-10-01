@@ -14,6 +14,8 @@ research/coreml_export/exports/
 *.hevc
 research/walkthrough/videos/
 research/walkthrough/out/
+# Ultralytics (AGPL-3.0) weights, exports, settings and scratch frames: throwaway benchmarking only (ADR 002)
+research/yolo_eval/work/
 # Swift Package Manager build products
 .build/
 .swiftpm/
