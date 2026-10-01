@@ -162,7 +162,8 @@ What this says:
   counts objects more than 50% visible), and it decides what gate G2 measures.
 - **The top is the unit a camera can count here.** ADR 006 lists `bottle_top` as a candidate class.
   This footage argues for trying it in Phase 0. On shelves below eye level, tops seen from above
-  also count rows several deep directly, where the MVP asks the user for a "×N deep" multiplier.
+  also count rows several deep directly. (The MVP then planned a "×N deep" multiplier; it was
+  dropped on 2 October 2026, section 17.)
 
 ## 6. The 1× or the 0.5× camera?
 
@@ -462,9 +463,9 @@ from the videos, each with a count, a unit, and closed cases with their size.
 - **Open bottles count as units in the MVP** (product owner, 2 October 2026).
   - The app counts every bottle it sees, so its reference is physical bottles: 82 and 84 above.
   - An open-bottle counter that estimates the liquid level comes after the MVP.
-- **Stacked tins and bags hidden behind can't be seen at all.** The MVP won't prompt for them
-  (product owner, 2 October 2026). They stay with the `×N deep` multiplier or a manual line (PRD FR-29,
-  FR-30).
+- **Stacked tins and bags hidden behind can't be seen at all.** The MVP has neither a "more behind?"
+  prompt nor a `×N deep` multiplier (product owner, 2 October 2026). The goal is a walk around the
+  storeroom that ends with a counted stock sheet.
 
 ## 17. Counting caps finds most of the rows behind
 
@@ -495,5 +496,6 @@ one bottle (section 12).
 - **What it means:**
   - Label tops (ADR 006's candidate `bottle_top`) from the start of the dataset.
   - The spike should test a commit that counts tops as well as bottles.
-  - The `×N deep` multiplier (FR-29) stays the answer for rows whose tops are hidden.
+  - The MVP has no `×N deep` multiplier (PRD FR-29, removed on 2 October 2026), so tops are how the
+    app counts the rows behind.
 
