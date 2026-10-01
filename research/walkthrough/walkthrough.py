@@ -75,7 +75,12 @@ GATE = 0.5  # 1:1 match gate, in box widths / heights (ADR 003: "at most half an
 LONG_GAP_S = 10.0  # a registration onto a commit older than this is listed for a human to check
 DETECTORS = {  # name: (shown, counted) score thresholds; in between = dashed, not counted (FR-18)
     "rfdetr": (0.3, 0.5), "rfdetr_tiled": (0.3, 0.5), "owlv2": (0.2, 0.3), "owlv2_caps": (0.15, 0.2),
-    "oracle": (0.5, 0.5)}
+    "oracle": (0.5, 0.5),
+    # Ultralytics YOLO (AGPL-3.0, ADR 002): cached by research/yolo_eval/run.py, never run from here
+    "yolo26n": (0.15, 0.25), "yolo26s": (0.15, 0.25), "yolo11n": (0.15, 0.25), "yolo11s": (0.15, 0.25),
+    "yolo26n_seg": (0.15, 0.25), "yoloe26s": (0.15, 0.25), "yoloworld": (0.15, 0.25),
+    "yoloe26s_caps": (0.15, 0.2), "yoloe26n_caps": (0.15, 0.2), "yoloworld_caps": (0.15, 0.2),
+    "yoloworld_tops": (0.15, 0.2)}
 OWL_MODEL = "google/owlv2-base-patch16-ensemble"
 OWL_QUERIES = {"bottle": "a photo of a bottle", "can": "a photo of a beverage can",
                "case": "a photo of a cardboard box"}
@@ -436,6 +441,8 @@ def make_detector(name: str, truth_path: str | None):
         if not truth_path or not os.path.exists(truth_path):
             raise SystemExit("--detectors oracle needs the synthetic video's .truth.json (make_test_video.py)")
         return Oracle(truth_path)
+    if name.startswith("yolo") and name in DETECTORS:
+        raise SystemExit(f"{name} is not cached for this keyframe: run research/yolo_eval/run.py first")
     raise SystemExit(f"unknown detector {name}; choose from {', '.join(DETECTORS)}")
 
 
