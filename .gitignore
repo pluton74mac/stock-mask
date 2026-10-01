@@ -14,3 +14,12 @@ research/coreml_export/exports/
 *.hevc
 research/walkthrough/videos/
 research/walkthrough/out/
+# Swift Package Manager build products
+.build/
+.swiftpm/
+# Core ML exports and the parity frames/fixtures (frames come from venue footage)
+*.mlmodelc
+ml/coreml/out/
+# Capture-mode recordings copied off a phone (venue footage)
+research/capture_replay/captures/
+research/capture_replay/out/
