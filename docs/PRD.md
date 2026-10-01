@@ -149,7 +149,9 @@ matter more, and they are a different product.
 4. An export that goes straight into the venue's spreadsheet or POS import.
 
 **Non-goals (MVP):**
-- partial or open-bottle levels;
+- telling open bottles from sealed ones, or reading fill levels: every bottle the camera sees
+  counts as one unit (decided 2 October 2026);
+- a "more behind?" prompt for stock hidden behind what the camera sees (decided 2 October 2026);
 - kegs by camera;
 - POS integration beyond file export;
 - purchase orders;
@@ -197,7 +199,8 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
 - Spanish (es-419) and English.
 
 **Out of the MVP:**
-- partial bottles;
+- open-bottle detection and fill levels (an open bottle counts as one unit);
+- a "more behind?" prompt for hidden stock;
 - kegs by camera;
 - empties/returnables detection (the user removes them);
 - multi-device merge;
@@ -211,7 +214,7 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
 2. Session merge across devices.
 3. Backend (Supabase + PowerSync) and a web view.
 4. PAR / below-par flags.
-5. Partial-bottle assist.
+5. An open-bottle counter that estimates each open bottle's liquid level.
 6. An "empty bottle / crate" class.
 7. Android, if the market requires it (ADR 001).
 
@@ -277,7 +280,7 @@ Priority: **M** = must have for the pilot, **S** = should have, **C** = could ha
 | ID | Requirement | P |
 |---|---|---|
 | FR-11 | Full-screen camera with overlays. Thumb-reachable controls: list button (badge: units · products), shutter, torch, zone, undo. | M |
-| FR-12 | Live detection of `bottle`, `can` and `case` at 0.5–2.5 m, shown as yellow outlines. | M |
+| FR-12 | Live detection of `bottle`, `can` and `case` at 0.5–2.5 m, shown as yellow outlines. An open bottle is a bottle: it counts as one unit, like a sealed one. | M |
 | FR-13 | **Hold-to-count:** commit when the phone has been steady for about 0.8 s, at least one stable candidate is in view, and tracking is normal. The shutter always works. Auto-count can be switched off. | M |
 | FR-14 | A commit counts only objects **fully inside the inner frame**. Objects cut by the frame edge wait for the next view. | M |
 | FR-15 | One haptic, one green sweep and one `+N` toast per commit, never one per item. | M |
@@ -522,7 +525,7 @@ We treat that as our pre-mortem:
 - POS/export templates;
 - multi-device merge + backend;
 - PAR flags;
-- partial-bottle assist;
+- an open-bottle counter that estimates the liquid level;
 - the market/platform decision (Android or English-speaking markets first).
 
 **Phase 3:** variance vs sales, multi-venue dashboard, team permissions.
@@ -561,7 +564,8 @@ We treat that as our pre-mortem:
 | Q7 | Who counts in pilot venues: managers or staff? | Affects wording and training; ask in P0-1. |
 
 **v1's open questions, answered by this review:**
-- **Accuracy bar for v1?** Full sealed units only; partials are Phase 2.
+- **Accuracy bar for v1?** Every bottle the camera sees counts as one unit, sealed or open. Fill
+  levels come after the MVP, with an open-bottle counter (decided 2 October 2026).
 - **Who assigns the product?** Count first, name the group once; the app suggests afterwards.
 - **Case default?** Count cases as cases; the export carries both cases and units, so no toggle.
 - **One phone or two?** One phone per session. Two phones can count different zones, with
@@ -580,3 +584,5 @@ We treat that as our pre-mortem:
 | 004 | Generic classes; the user names groups once; suggestions from case barcodes + FeaturePrint kNN; never silent | [ADR 004](decisions/004-sku-identification.md) |
 | 005 | GRDB/SQLite, no backend in the MVP, XLSX + Argentina-ready CSV | [ADR 005](decisions/005-storage-backend-export.md) |
 | 006 | Own data, CVAT, pre-labelling with Apache-licensed open-vocab models, unseen-venue holdout | [ADR 006](decisions/006-training-data.md) |
+| – | Every bottle the camera sees counts as one unit, sealed or open. No open-bottle or fill-level detection in the MVP; an open-bottle counter that estimates the liquid level comes after it. (product owner, 2 October 2026) | [Walkthrough results §16](../research/walkthrough/RESULTS.md) |
+| – | No "more behind?" prompt for hidden stock in the MVP. Depth stays with the `×N deep` multiplier (FR-29) and manual lines (FR-30). (product owner, 2 October 2026) | [Walkthrough results §16](../research/walkthrough/RESULTS.md) |
