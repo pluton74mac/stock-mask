@@ -14,3 +14,11 @@ research/coreml_export/exports/
 *.hevc
 research/walkthrough/videos/
 research/walkthrough/out/
+# ml/: frames, pre-labels, labels, Label Studio's database, datasets and training runs are venue data
+ml/data/
+ml/.venv*/
+# Model checkpoints, wherever they land
+*.pth
+*.pt
+*.ckpt
+*.safetensors
