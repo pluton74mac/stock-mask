@@ -33,6 +33,18 @@ public struct DisplayMapping: Sendable, Equatable {
         return CGPoint(x: p.x * view.width, y: p.y * view.height)
     }
 
+    /// The part of the upright image the screen shows (x0, y0, x1, y1, normalised). Aspect fill
+    /// crops it: a 19.5:9 phone in portrait shows about the middle 62% of the camera image's width.
+    public func visibleRegion() -> SIMD4<Float> {
+        let back = sensorToView.inverted()
+        let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 1)].map { p -> SIMD2<Float> in
+            let s = p.applying(back)
+            return orientation.uprightPoint(sensor: SIMD2(Float(s.x), Float(s.y)))
+        }
+        let b = FrameOrientation.box(corners[0], corners[1])
+        return b.clamped(lowerBound: .zero, upperBound: .one)
+    }
+
     /// A box (x0, y0, x1, y1, upright-normalised) on screen.
     public func rect(_ box: SIMD4<Float>, in view: CGSize) -> CGRect {
         let a = point(SIMD2(box.x, box.y), in: view), b = point(SIMD2(box.z, box.w), in: view)

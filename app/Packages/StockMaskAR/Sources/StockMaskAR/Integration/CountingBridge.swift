@@ -31,6 +31,16 @@ public struct CountingBridge: Sendable {
         return SIMD4(Float(b.x), Float(b.y), Float(1 - b.x), Float(1 - b.y))
     }
 
+    /// Keeps the inner frame on screen: the band (a fraction of the image's short side, 0.15 by
+    /// default) grows to cover whatever the screen crops off the camera image, so nothing outside
+    /// the screen is ever counted. `visible` is the shown part of the upright image of `size`.
+    public mutating func setVisibleRegion(_ visible: SIMD4<Float>, imageSize size: SIMD2<Float>) {
+        let short = min(size.x, size.y)
+        let crops = [visible.x * size.x, (1 - visible.z) * size.x, visible.y * size.y, (1 - visible.w) * size.y]
+        let band = min(0.3, max(0.15, Double(crops.max()! / short) + 0.005))
+        engine.parameters.innerFrame.band = band
+    }
+
     /// Every frame. `viewShift`: degrees across and up since the last frame (ViewMotion).
     public mutating func hold(viewSpeed: Double, viewShift: SIMD2<Double>?, at t: TimeInterval, stableCandidate: Bool,
                               trackingNormal: Bool) -> HoldTrigger.Decision {

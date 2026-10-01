@@ -97,7 +97,9 @@ public final class CountingSession {
     public private(set) var toast: Toast?
     public private(set) var undoDeadline: Date?
     public private(set) var card: CommitCard?
-    public private(set) var overlay = OverlayState()
+    public private(set) var overlay = OverlayState() { didSet { if overlay != oldValue { overlayRevision &+= 1 } } }
+    /// Bumped whenever `overlay` changes: the AR layer re-syncs RealityKit only then.
+    public private(set) var overlayRevision = 0
     public private(set) var sheet = StockSheetSummary()
     public private(set) var isCommitting = false
     public private(set) var lastError: String?
@@ -118,6 +120,13 @@ public final class CountingSession {
         detectorBusy = false
         tracks.removeAll()
         boxes = []
+    }
+
+    /// The screen shows `visible` of the upright camera image of `imageSize` (DisplayMapping): keep
+    /// the inner frame inside it.
+    public func setVisibleRegion(_ visible: SIMD4<Float>, imageSize: SIMD2<Float>) {
+        counting.setVisibleRegion(visible, imageSize: imageSize)
+        innerFrame = counting.innerFrame(imageSize: imageSize)
     }
 
     /// The commit threshold of the model in use (FR-18: below it, outlines are dashed and never counted).
