@@ -23,3 +23,6 @@ ml/coreml/out/
 # Capture-mode recordings copied off a phone (venue footage)
 research/capture_replay/captures/
 research/capture_replay/out/
+
+# Claude Code agent worktrees
+.claude/worktrees/

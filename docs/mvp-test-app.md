@@ -96,6 +96,22 @@ public struct CommitResult: Sendable {
   A top with no bottle under it (a row behind) counts as a bottle. The rule and its limits are
   documented in the package README.
 
+**As built (StockMaskCounting, 2 October 2026).** The package README has the details. Additions to the contract:
+- **New fields:**
+  - `Detection.productKey`.
+  - On `CountedItem`: `top`, `productKey`, `confidence` and `detectionIndex`.
+  - On `CommitResult`: `statuses`, `mergedTops`, `driftOffset`, `driftRefined`, and the over-zone counts.
+  - `CountedZone` is `Codable`.
+- **For StockMaskCore:**
+  - Save each item's `top`. Without it, a top seen alone can't be matched to a bottle counted whole on a revisit.
+  - An item of class `.bottleTop` is a bottle counted by its top: it counts as one bottle.
+- **For StockMaskAR:**
+  - Detector boxes must use the same image orientation as the intrinsics: ARKit's captured image, which is landscape.
+  - Each commit's `ARAnchor` uses `zone.transform`. Call `updateAnchor` when ARKit moves the anchor.
+  - The drift alarm only flags (it needs at least 3 detections over counted zones), so the AR layer pauses counting or undoes.
+  - The shutter always commits, so the AR layer disables it while tracking is limited (FR-20).
+- **FR-14 is read as "whole box, centre inside the inner frame"**, as in `walkthrough.py` and `sim.py`.
+
 `StockMaskCore` owns persistence and the sheet: venue, zone, sku, session, commit, counted_zone,
 item, item_group, manual_line and event, as in PRD §11 without `depth_multiplier`. Every commit is
 one database transaction (FR-7). The exported sheet has one line per product, with units and full
