@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSCameraUsageDescription</key>
-	<string>StockMask uses the camera and LiDAR to count the bottles, cans and cases on your shelves. Photos stay on this phone unless you export them.</string>
+	<string>StockMask uses the camera and LiDAR to count the stock on your shelves. Photos stay on this phone unless you export them.</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arkit</string>

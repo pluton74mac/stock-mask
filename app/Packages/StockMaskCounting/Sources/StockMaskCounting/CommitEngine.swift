@@ -485,7 +485,7 @@ public struct CommitEngine: Sendable {
 // MARK: - Storage
 
 enum Family: CaseIterable, Sendable {
-    case bottle, can, `case`
+    case bottle, can, `case`, carton, bag
 }
 
 extension ObjectClass {
@@ -494,6 +494,8 @@ extension ObjectClass {
         case .bottle, .bottleTop: .bottle
         case .can: .can
         case .case: .case
+        case .carton: .carton
+        case .bag: .bag
         }
     }
 }

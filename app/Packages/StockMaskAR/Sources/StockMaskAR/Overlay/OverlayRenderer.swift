@@ -130,6 +130,8 @@ public final class OverlayRenderer {
         case .can: .generateCylinder(height: 0.12, radius: 0.033)
         case .case: .generateBox(size: SIMD3(0.30, 0.24, 0.24))
         case .bottleTop: .generateSphere(radius: 0.02)
+        case .carton: .generateBox(size: SIMD3(0.07, 0.20, 0.07))  // a 1 L carton
+        case .bag: .generateBox(size: SIMD3(0.12, 0.20, 0.07))     // a 1 kg bag of sugar
         }
     }
 }

@@ -182,6 +182,8 @@ extension ObjectClass {
         case .can: "can"
         case .case: "case"
         case .bottleTop: "bottle (by its top)"
+        case .carton: "carton"
+        case .bag: "bag"
         }
     }
 }

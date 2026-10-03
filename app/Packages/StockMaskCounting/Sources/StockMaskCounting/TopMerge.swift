@@ -111,7 +111,7 @@ enum TopMerge {
             case .bottleTop:
                 unit.body = nil
                 unit.top = pos(i)
-            case .can, .case:
+            case .can, .case, .carton, .bag:
                 break
             }
             units.append(unit)

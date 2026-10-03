@@ -5,9 +5,11 @@ import simd
 // the packages"). The names are fixed; fields marked "added" grow the contract and all have defaults.
 
 /// A detector class (ADR 006). `bottleTop` is the top of a bottle: the rows behind a front row are
-/// counted by their tops (product decision of 2 October 2026, PRD FR-29 removed).
+/// counted by their tops (product decision of 2 October 2026, PRD FR-29 removed). `carton` and `bag`
+/// are single units packed in a carton (cream, juice) or a bag (sugar): the camera counts everything
+/// it sees (product decision of 3 October 2026). New classes go at the end: raw values are stored.
 public enum ObjectClass: String, Codable, Sendable, CaseIterable {
-    case bottle, can, `case`, bottleTop = "bottle_top"
+    case bottle, can, `case`, bottleTop = "bottle_top", carton, bag
 }
 
 /// One detector box, lifted to 3D when depth allows.

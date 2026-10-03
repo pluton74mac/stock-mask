@@ -24,10 +24,10 @@ WALKTHROUGH = REPO / "research" / "walkthrough"
 VIDEOS = WALKTHROUGH / "videos"  # git-ignored; the clips live only in the main checkout
 
 # The detector's classes, in the order of ObjectClass in docs/mvp-test-app.md. COCO category id = index + 1.
-CLASSES = ("bottle", "can", "case", "bottle_top")
-# Labelled but not trained in v0 (LABELING.md, "Cartons and bags"): kept so that adding a class later needs no
-# second labelling pass. COCO category ids 5 and 6.
-PARKED = ("carton", "bag")
+# carton and bag joined on 3 October 2026 (the owner: the camera counts everything). COCO ids: bottle 1, can 2,
+# case 3, bottle_top 4, carton 5, bag 6, the same ids they had while parked.
+CLASSES = ("bottle", "can", "case", "bottle_top", "carton", "bag")
+PARKED: tuple[str, ...] = ()  # labelled but not trained: none now
 ALL_LABELS = CLASSES + PARKED
 
 # Which clip goes where. Walk 1 trains and validates; walk 2 tests, because only walk 2 has reference counts

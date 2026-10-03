@@ -457,7 +457,7 @@ extension StockStore {
 /// How `saveCommit` groups a commit's items: by the AR layer's key, else by kind.
 enum GroupSlot: Hashable, Comparable {
     case key(Int)
-    case kind(Int)  // 0 bottles and tops, 1 cans, 2 cases
+    case kind(Int)  // 0 bottles and tops, 1 cans, 2 cases, 3 cartons, 4 bags
 
     init(_ item: NewItem) {
         if let key = item.groupKey {
@@ -467,6 +467,8 @@ enum GroupSlot: Hashable, Comparable {
             case .bottle, .bottleTop: self = .kind(0)
             case .can: self = .kind(1)
             case .case: self = .kind(2)
+            case .carton: self = .kind(3)
+            case .bag: self = .kind(4)
             }
         }
     }

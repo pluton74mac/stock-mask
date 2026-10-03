@@ -20,8 +20,8 @@ boxes on frames from the storeroom walks.
 | `bottle_top` | every visible top of a bottle: cap, cork, stopper, pourer, pump, or the end of a foil capsule | yes |
 | `can` | a drink can or a food tin, any size | yes |
 | `case` | a shipping carton or shrink-wrapped tray holding several units | yes |
-| `carton` | one unit packed in a carton (cream, juice) | no: proposed, see below |
-| `bag` | one unit packed in a bag (sugar) | no: proposed, see below |
+| `carton` | one unit packed in a carton (cream, juice) | yes, since 3 October 2026 |
+| `bag` | one unit packed in a bag (sugar) | yes, since 3 October 2026 |
 
 **How the app counts these** ([docs/mvp-test-app.md](../docs/mvp-test-app.md)):
 - Every bottle the camera sees is one unit, open or sealed.
@@ -74,14 +74,13 @@ So a front bottle gets two boxes, the bottle and its top; a bottle behind it oft
 - Shrink-wrapped trays are a case. Same 50% rule as bottles.
 - **An open case:** box the case, and box each bottle top you can see inside it.
 
-### carton and bag: proposed, not trained in v0
-- **What they are.** Cartons (cream, juice) and bags (sugar) are units in the stocktake. In the three bays of the
-  second walk they are about 8% of the units (RESULTS §15, §16), and the app has no class for them.
-- **Proposal: box them now** as `carton` and `bag`, one box per unit you can see.
-  - `train.py` leaves them out, so they train as background, exactly as if unlabelled.
-  - If the owner wants the camera to count them, the classes go in without a second labelling pass.
-  - If not, they stay manual lines (FR-30) and the boxes cost nothing.
-- **This is the owner's decision.**
+### carton and bag
+- **What they are.** A carton is one unit packed in a carton (cream, juice). A bag is one unit packed in a bag
+  (sugar). In the three bays of the second walk they are about 8% of the units (RESULTS §15, §16).
+- **The owner decided on 3 October 2026 that the camera counts everything**, so both are trained classes.
+  - Before that they were labelled but parked, so the pilot's boxes needed no second pass.
+- **One box per unit you can see,** around the face you see. The 50% rule is the same as for bottles.
+- **Stacked units hidden behind others are not labelled:** the camera can't count them.
 
 ### Never label
 - **Reflections** in steel, glass or mirrors. The model must learn to ignore them.

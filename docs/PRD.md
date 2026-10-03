@@ -182,7 +182,8 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
 **In the MVP:**
 - venue, zones and catalog (manual entry, or CSV/XLSX import);
 - optional printed rack tags;
-- camera counting of **bottles, cans and closed cases** on shelves, pallets and floor stacks;
+- camera counting of **everything it sees: bottles, cans and tins, cartons, bags and closed cases** on shelves,
+  pallets and floor stacks;
 - open cases counted from above;
 - hold-to-count commits;
 - counted zones and a green AR overlay that persist across revisits and app restarts;
@@ -278,7 +279,7 @@ Priority: **M** = must have for the pilot, **S** = should have, **C** = could ha
 | ID | Requirement | P |
 |---|---|---|
 | FR-11 | Full-screen camera with overlays. Thumb-reachable controls: list button (badge: units · products), shutter, torch, zone, undo. | M |
-| FR-12 | Live detection of `bottle`, `can` and `case` at 0.5–2.5 m, shown as yellow outlines. An open bottle is a bottle: it counts as one unit, like a sealed one. | M |
+| FR-12 | Live detection of `bottle`, `can`, `case`, `carton` and `bag`, plus `bottle_top` for the rows behind, at 0.5–2.5 m, shown as yellow outlines. An open bottle is a bottle: it counts as one unit, like a sealed one. | M |
 | FR-13 | **Hold-to-count:** commit when the phone has been steady for about 0.8 s, at least one stable candidate is in view, and tracking is normal. The shutter always works. Auto-count can be switched off. | M |
 | FR-14 | A commit counts only objects **fully inside the inner frame**. Objects cut by the frame edge wait for the next view. | M |
 | FR-15 | One haptic, one green sweep and one `+N` toast per commit, never one per item. | M |
@@ -582,4 +583,5 @@ We treat that as our pre-mortem:
 | 005 | GRDB/SQLite, no backend in the MVP, XLSX + Argentina-ready CSV | [ADR 005](decisions/005-storage-backend-export.md) |
 | 006 | Own data, CVAT, pre-labelling with Apache-licensed open-vocab models, unseen-venue holdout | [ADR 006](decisions/006-training-data.md) |
 | – | Every bottle the camera sees counts as one unit, sealed or open. No open-bottle or fill-level detection in the MVP; an open-bottle counter that estimates the liquid level comes after it. (product owner, 2 October 2026) | [Walkthrough results §16](../research/walkthrough/RESULTS.md) |
+| – | The camera counts everything it sees: cartons and bags get detector classes too (ADR 006 Amendment 1). (product owner, 3 October 2026) | [ADR 006](decisions/006-training-data.md) |
 | – | No "more behind?" prompt and no `×N deep` multiplier (FR-29 removed). The goal is a walk around the storeroom that ends with a counted stock sheet: the camera counts what it sees, including the rows behind by their tops. (product owner, 2 October 2026) | [Walkthrough results §16–17](../research/walkthrough/RESULTS.md) |

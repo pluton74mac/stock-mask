@@ -1,6 +1,6 @@
 # ADR 006: Training data, labelling and ML tooling
 
-Status: **Accepted** · 2026-09-25 · Amendment 1 (`bottle_top`, labelling without CVAT) **Proposed** · 2026-10-02,
+Status: **Accepted** · 2026-09-25 · Amendment 1 (`bottle_top`, `carton`, `bag`, labelling without CVAT) **Accepted** · 2026-10-03,
 [below](#amendment-1-bottle_top-and-labelling-without-cvat)
 
 ## Decision
@@ -73,11 +73,13 @@ $99/month. What rules out the free tier is keeping venue photos private.
 
 ## Amendment 1: `bottle_top`, and labelling without CVAT
 
-Status: **Proposed** · 2026-10-02. Context: P0-7 dataset v0, built in `ml/` from the two storeroom walks.
+Status: **Accepted** · 2026-10-03, by the product owner. Proposed 2026-10-02. Context: P0-7 dataset v0, built in
+`ml/` from the two storeroom walks.
 
 ### `bottle_top` becomes a class
-The classes become `bottle`, `can`, `case` and `bottle_top`, in the order of `ObjectClass` in
-[mvp-test-app.md](../mvp-test-app.md).
+The classes become `bottle`, `can`, `case`, `bottle_top`, `carton` and `bag`, in the order of `ObjectClass` in
+[mvp-test-app.md](../mvp-test-app.md). `carton` and `bag` joined on 3 October 2026: the camera counts everything it
+sees.
 
 **Why:**
 - The MVP has no `×N deep` multiplier (FR-29 removed) and no "more behind?" prompt (2 October 2026). The camera counts
@@ -112,8 +114,8 @@ set measures this; a larger input (512 or 576) costs latency (ADR 002).
     are for.
   - Open bottles are bottles. A single bottle in its own gift box is a `bottle`. Food tins are `can`.
   - Frames that show a person are excluded rather than blurred.
-- **Cartons and bags** are boxed as `carton` and `bag` but not trained in v0. They are about 8% of the units in the
-  three filmed bays. Whether the app counts them is the owner's decision; without a class they stay manual lines.
+- **Cartons and bags** are boxed and trained as `carton` and `bag`: about 8% of the units in the three filmed bays.
+  They were parked until the owner decided, on 3 October 2026, that the camera counts everything.
 - **The pre-labeller keeps front bottles.** `walkthrough.clean()` can remove a front bottle as a "row box" when the
   neck and cap boxes of the bottles behind lie inside it. In the pilot it did so in every one of the five frames
   checked. `ml/prelabel.py` counts a box as a row only when it holds whole-height objects.

@@ -4,13 +4,15 @@ import Foundation
 /// with `ItemClass(rawValue: cls.rawValue)`.
 ///
 /// A `case` counts as one case of its product (converted with `units_per_case`); every other class
-/// counts as one unit. A `bottle_top` reaches the store only when it stands for a bottle in a row
+/// counts as one unit, `carton` and `bag` included (one carton of cream, one bag of sugar). A `bottle_top` reaches the store only when it stands for a bottle in a row
 /// behind; a top over a bottle counted in the same view is merged by the counting layer.
 public enum ItemClass: String, Codable, Sendable, CaseIterable, Comparable {
     case bottle
     case can
     case `case`
     case bottleTop = "bottle_top"
+    case carton
+    case bag
 
     /// True for closed cases, which count as `units_per_case` units of their product.
     public var isCase: Bool { self == .case }

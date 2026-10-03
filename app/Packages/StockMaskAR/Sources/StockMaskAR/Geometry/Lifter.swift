@@ -15,6 +15,8 @@ public struct ClassPrior: Sendable, Equatable {
         case .can: ClassPrior(radius: 0.033, width: 0.045...0.10, height: 0.06...0.25)
         case .case: ClassPrior(radius: 0.12, width: 0.15...0.70, height: 0.08...0.50)
         case .bottleTop: ClassPrior(radius: 0.015, width: 0.012...0.07, height: 0.008...0.08)
+        case .carton: ClassPrior(radius: 0.035, width: 0.05...0.15, height: 0.08...0.35)
+        case .bag: ClassPrior(radius: 0.04, width: 0.06...0.35, height: 0.05...0.45)
         }
     }
 

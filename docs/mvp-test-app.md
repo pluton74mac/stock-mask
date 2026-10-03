@@ -61,7 +61,7 @@ is installed. Keep the app target thin (entry point, Info.plist, assets) so that
 `StockMaskCounting` owns these value types. The names are fixed; the fields can grow.
 
 ```swift
-public enum ObjectClass: String, Codable, Sendable { case bottle, can, `case`, bottleTop = "bottle_top" }
+public enum ObjectClass: String, Codable, Sendable { case bottle, can, `case`, bottleTop = "bottle_top", carton, bag }
 
 public struct Detection: Sendable {          // one detector box, lifted to 3D when depth allows
     public var cls: ObjectClass

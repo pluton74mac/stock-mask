@@ -87,7 +87,7 @@ func makeDraft(
             let top: SIMD3<Float>? = switch cls {
             case .bottle: position + SIMD3(0, 0.14, 0)
             case .bottleTop: position
-            case .can, .case: nil
+            case .can, .case, .carton, .bag: nil
             }
             items.append(NewItem(
                 id: UUID(), cls: cls, position: position, top: top, confidence: 0.93, detectionIndex: items.count,
