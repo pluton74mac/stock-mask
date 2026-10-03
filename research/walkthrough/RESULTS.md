@@ -499,3 +499,33 @@ one bottle (section 12).
   - The MVP has no `×N deep` multiplier (PRD FR-29, removed on 2 October 2026), so tops are how the
     app counts the rows behind.
 
+## 18. Correction: the cleanup step dropped some front bottles
+
+**The bug.** While labelling (`ml/LABELING.md`), a front bottle often had no draft box.
+`clean()` had taken its box for a box around a whole row, because the necks and caps of the
+bottles behind it lie inside it. Now a row box must hold whole objects side by side: inner boxes of
+at least 60% of its height.
+
+**The rerun.** The section 16–17 runs, rerun as `out/w2-bayN-fixclean`. Bottles after matching:
+
+| detector | bay 1 (82) | bay 2 (84) | bay 3 (68) | total (234) | before the fix |
+|---|---|---|---|---|---|
+| RF-DETR Nano | 34 | 35 | 33 | 102 | 99 |
+| the same, 2 × 3 tiles | 49 | 38 | 36 | 123 | 119 |
+| OWLv2 | 52 | 31 | 31 | 114 | 104 |
+| OWLv2, caps | 78 | 62 | 45 | 185 | 187 |
+| YOLO26n | 26 | 31 | 27 | 84 | 81 |
+| YOLO26s | 40 | 36 | 35 | 111 | 106 |
+| YOLO11s | 40 | 32 | 27 | 99 | 99 |
+| YOLO26n-seg | 29 | 29 | 27 | 85 | 86 |
+| YOLOE-26s, "bottle" | 36 | 29 | 33 | 98 | 99 |
+
+- **The conclusions stand.**
+  - Whole-bottle detection counts 84–123 of the 234 bottles.
+  - Counting caps gets 185.
+  - OWLv2's whole-bottle count moves most: +10, mostly in bay 1.
+- **Prompts on caps rise in bay 2,** from 82 to 132. More cap boxes survive, and more of them fall
+  inside counted zones.
+- **The earlier numbers are not rewritten.** Sections 11, 16 and 17, and
+  `research/yolo_eval/RESULTS.md`, keep the numbers from before the fix: read them with this table.
+

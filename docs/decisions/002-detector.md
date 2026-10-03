@@ -15,6 +15,36 @@ Status: **Accepted, pending the Phase 0 device benchmark (P0-3)** · 2026-09-25
   stored in COCO format, which `supervision` converts to YOLO format in one call. Changing models
   is a retrain, not a rewrite.
 
+## Update, 2 October 2026: Ultralytics measured on real footage
+
+Full results: [`research/yolo_eval/RESULTS.md`](../../research/yolo_eval/RESULTS.md).
+
+**The test.** With COCO or zero-shot weights, through the walkthrough replay. The reference is the
+234 bottles of the second storeroom walk (three bays), counted per product. The counts below are
+after the cleanup fix in walkthrough RESULTS §18.
+
+| detector | bottles counted |
+|---|---|
+| RF-DETR Nano | 102 |
+| YOLO26n | 84 |
+| YOLO26s | 111 |
+| YOLO11s | 99 |
+
+- **Every whole-bottle detector counts about the front row,** so model choice isn't the gap. Depth
+  is: walkthrough RESULTS §16–17.
+- **Speed on an Apple M5, from Core ML's placement plan; iPhone latency is still P0-3:**
+  - YOLO26n: 5.1 MB, 1.8 ms.
+  - RF-DETR Nano: 54.3 MB, 9.4 ms, with 592 of its 600 ops on the Neural Engine.
+- **"Bottle cap" prompts fail on YOLOE and YOLO-World.** Only OWLv2's cap prompt works zero-shot,
+  and OWLv2 doesn't run on a phone.
+
+**Decision unchanged.** RF-DETR Nano stays the default and Ultralytics the paid fallback. If the
+fallback is ever used, take **YOLO26s** over YOLO26n: it counts closer, for 19 MB and 3.3 ms.
+
+**Revisit if:**
+- RF-DETR fails P0-3 on the phone;
+- a fine-tuned YOLO counts more than a point better than a fine-tuned RF-DETR on our test set.
+
 ## What the detector has to do
 
 - **Find:** the three classes on shelves, pallets and in open cases, 0.5 to 2.5 m from the

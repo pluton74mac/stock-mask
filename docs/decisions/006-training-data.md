@@ -1,6 +1,7 @@
 # ADR 006: Training data, labelling and ML tooling
 
-Status: **Accepted** · 2026-09-25
+Status: **Accepted** · 2026-09-25 · Amendment 1 (`bottle_top`, labelling without CVAT) **Proposed** · 2026-10-02,
+[below](#amendment-1-bottle_top-and-labelling-without-cvat)
 
 ## Decision
 
@@ -69,3 +70,60 @@ $99/month. What rules out the free tier is keeping venue photos private.
   have people, but check.
 - **Model card per release:** data version, holdout results, the Core ML parity result, and the
   licenses of everything in it.
+
+## Amendment 1: `bottle_top`, and labelling without CVAT
+
+Status: **Proposed** · 2026-10-02. Context: P0-7 dataset v0, built in `ml/` from the two storeroom walks.
+
+### `bottle_top` becomes a class
+The classes become `bottle`, `can`, `case` and `bottle_top`, in the order of `ObjectClass` in
+[mvp-test-app.md](../mvp-test-app.md).
+
+**Why:**
+- The MVP has no `×N deep` multiplier (FR-29 removed) and no "more behind?" prompt (2 October 2026). The camera counts
+  the rows behind the front row by their tops.
+- On the second walk, counting caps took bays 1 and 2 from about half the bottles to about seven eighths (walkthrough
+  [RESULTS §12, §17](../../research/walkthrough/RESULTS.md)).
+- In the labelling pilot, five held keyframes labelled with tops showed 51 of the 54 reference units of the products in
+  view ([ml/LABELING.md](../../ml/LABELING.md)).
+
+**Rule.** Every visible top gets a box, on front and back rows alike. So a front bottle has a `bottle` box and a
+`bottle_top` box. Counting merges them: a top in the top region of a bottle counted in the same view is that bottle;
+any other top is a bottle in a row behind.
+
+**Risk.** Tops are small. At Nano's 384 px input, a cap from a 1080 × 1920 frame is about 10–40 px. Dataset v0's test
+set measures this; a larger input (512 or 576) costs latency (ADR 002).
+
+### Labelling
+- **Boxes, not masks** (owner, 2026-10-02). Masks are revisited only if P0-4 shows that boxes give poor LiDAR depth.
+  They could then be generated from the corrected boxes with SAM, with no relabelling.
+- **CVAT needs Docker, which the development Mac lacks** (no Docker, no Homebrew).
+  - For v0, Claude labelling agents correct OWLv2's draft boxes with `ml/review.py`: renders with numbered boxes and a
+    pixel grid, JSON edits, re-renders and QA checks. The owner spot-checks on a local page.
+  - In the pilot this took about 4 minutes and 4 image views per frame. 38% of the draft boxes were right as drawn,
+    25% needed moving and 37% deleting.
+  - Label Studio Community Edition (Apache-2.0) was the planned stand-in for CVAT. It was set aside when the agents
+    took over the corrections.
+  - CVAT stays the choice for human labelling once there is a Docker host.
+- **The label rules are written down in [ml/LABELING.md](../../ml/LABELING.md)** (the guardrail above). Additions to
+  the rules above:
+  - The 50% rule also covers objects cut by the image border.
+  - Tops are labelled whenever they can be identified, even when mostly hidden behind a front cap: that is what they
+    are for.
+  - Open bottles are bottles. A single bottle in its own gift box is a `bottle`. Food tins are `can`.
+  - Frames that show a person are excluded rather than blurred.
+- **Cartons and bags** are boxed as `carton` and `bag` but not trained in v0. They are about 8% of the units in the
+  three filmed bays. Whether the app counts them is the owner's decision; without a class they stay manual lines.
+- **The pre-labeller keeps front bottles.** `walkthrough.clean()` can remove a front bottle as a "row box" when the
+  neck and cap boxes of the bottles behind lie inside it. In the pilot it did so in every one of the five frames
+  checked. `ml/prelabel.py` counts a box as a row only when it holds whole-height objects.
+
+### Data and training for v0
+- **Splits.** Walk 1 is train and val, in 10 s blocks with a 1 s gap at each boundary. Walk 2's hold keyframes are the
+  test set, because only walk 2 has reference counts per product.
+- **Leakage limit.** It is the same venue, the same products and the same phone, four days apart. That is not the
+  unseen-venue holdout this ADR requires; that holdout still needs a second venue.
+- **Training on the development Mac.** RF-DETR Nano trains on MPS in full fp32: about a minute per epoch of 100 frames
+  on an Apple M5. torch 2.7's fp16 GradScaler fails on MPS, so mixed precision is for CUDA only.
+- **Evaluation.** Besides mAP, `ml/eval.py` reports the per-view count error for bottle units: bottles plus tops with
+  no bottle of their own.
