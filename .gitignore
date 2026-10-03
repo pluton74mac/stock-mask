@@ -41,3 +41,6 @@ ml/.venv*/
 xcuserdata/
 *.xcuserstate
 DerivedData/
+
+# Local signing (personal team id)
+app/Signing.local.xcconfig

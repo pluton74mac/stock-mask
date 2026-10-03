@@ -1,0 +1,4 @@
+// Signing for the StockMask target. The team lives in Signing.local.xcconfig, which is git-ignored because the
+// repository is public. Create it with one line, DEVELOPMENT_TEAM = <your team id>, or pick the team in Xcode
+// (Signing & Capabilities), which writes it into the project instead.
+#include? "Signing.local.xcconfig"
