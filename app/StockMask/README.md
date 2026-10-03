@@ -67,7 +67,7 @@ To try another model without rebuilding (e.g. a fine-tuned one), copy its `.mlpa
 it is compiled on the phone at the next start. Without any model the app still runs, and the HUD says
 the detector is missing.
 
-## 7. Run it
+## 4. Run it
 
 1. Plug in a LiDAR iPhone (12 Pro or a later Pro model; ADR 001) and choose it as the run
    destination.
@@ -78,7 +78,7 @@ the detector is missing.
    - the gauge button (top right) opens the HUD: tracking, FPS, detector ms, thermal, battery,
      and the capture switch.
 
-## 8. After the first device run
+## 5. After the first device run
 
 - Run `app/scripts/typecheck-ios.sh` once more to make sure nothing drifted. It compiled the
   iOS-only code for Mac Catalyst before Xcode was here. Read the iOS build's warnings too.
