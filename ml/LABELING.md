@@ -3,8 +3,12 @@
 Dataset v0 is the first labelled data for StockMask's detector (P0-7, [ADR 006](../docs/decisions/006-training-data.md)):
 boxes on frames from the storeroom walks.
 
-- **Who labels.** Claude labelling agents correct OWLv2's draft boxes with `ml/review.py`, frame by frame. The owner
-  spot-checks ([LABELING-TOOL.md](LABELING-TOOL.md)).
+- **Who labels.** Since 3 October 2026, nobody: labels are made automatically ([AUTOLABEL.md](AUTOLABEL.md)).
+  - The rules below still define a correct box.
+  - The review loop below made the 15 checked frames that calibrate the automatic labels: 9 from walk 1, 6 from
+    walk 2.
+  - Before that, Claude labelling agents corrected OWLv2's draft boxes with `ml/review.py`, frame by frame, and the
+    owner spot-checked ([LABELING-TOOL.md](LABELING-TOOL.md)).
 - **Where the data lives.** Frames, labels and renders stay on this Mac, in the git-ignored `ml/data/`.
   - Never commit, upload or publish them.
   - Never write a product name or the venue into this repository.

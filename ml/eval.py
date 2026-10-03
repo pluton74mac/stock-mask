@@ -61,9 +61,11 @@ def main():
     ap.add_argument("--checkpoint", help="a checkpoint path instead of --run")
     ap.add_argument("--labels", default=str(common.LABELS))
     ap.add_argument("--pseudo", action="store_true", help="the labels are unchecked OWLv2 pre-labels (smoke test)")
-    ap.add_argument("--split", default="test")
+    ap.add_argument("--split", default="test", help="split(s), comma-separated, e.g. test or train,val")
     ap.add_argument("--kinds", default="hold", help="frame kinds to evaluate, e.g. hold or hold,periodic")
     ap.add_argument("--threshold", type=float, default=0.5, help="the commit threshold (FR-18)")
+    ap.add_argument("--sweep", action="store_true", help="also print the bottle-unit count error for commit "
+                                                        "thresholds 0.2-0.6, to choose one on these frames")
     args = ap.parse_args()
     ckpt = Path(args.checkpoint) if args.checkpoint else common.DATA / "runs" / (args.run or "") / \
         "checkpoint_best_total.pth"
@@ -77,7 +79,7 @@ def main():
     coco = common.load_coco(Path(args.labels))
     by_image = common.boxes_by_image(coco)
     kinds = set(args.kinds.split(","))
-    images = [im for im in coco["images"] if im["split"] == args.split and im.get("kind", "hold") in kinds]
+    images = [im for im in coco["images"] if im["split"] in args.split.split(",") and im.get("kind", "hold") in kinds]
     if not images:
         raise SystemExit(f"no labelled {args.split} frames of kind {args.kinds} in {args.labels}")
     model = RFDETR.from_checkpoint(str(ckpt), trust_checkpoint=True)  # our own training output
@@ -103,6 +105,20 @@ def main():
     result = MeanAveragePrecision().update(preds, targets).compute()
     ap50 = {classes[c]: float(result.ap_per_class[i, 0]) for i, c in enumerate(result.matched_classes)}
     ap5095 = {classes[c]: float(result.ap_per_class[i].mean()) for i, c in enumerate(result.matched_classes)}
+    if args.sweep:  # the commit threshold that counts bottle units best on these frames
+        bi, ti = classes.index("bottle"), classes.index("bottle_top")
+        print("| commit threshold | bottle units: mean error | median | p90 | signed mean |\n|---|---|---|---|---|")
+        for thr in np.arange(0.2, 0.61, 0.05):
+            err = []
+            for p, t in zip(preds, targets):
+                true = common.bottle_units(t.xyxy[t.class_id == bi].tolist(), t.xyxy[t.class_id == ti].tolist())
+                q = p[p.confidence >= thr]
+                got = common.bottle_units(q.xyxy[q.class_id == bi].tolist(), q.xyxy[q.class_id == ti].tolist())
+                if true:
+                    err.append((got - true) / true)
+            a = np.abs(err)
+            print(f"| {thr:.2f} | {a.mean():.0%} | {np.median(a):.0%} | {np.percentile(a, 90):.0%} | {np.mean(err):+.0%} |")
+        print()
     tp, npred, ntrue = collections.Counter(), collections.Counter(), collections.Counter()
     errs = collections.defaultdict(list)
     for p, t in zip(preds, targets):
@@ -138,7 +154,7 @@ def main():
     for k, row in enumerate(cm.matrix):
         lines.append(f"| {(classes + ['background'])[k]} | " + " | ".join(str(int(v)) for v in row) + " |")
     print("\n".join(lines))
-    out = ckpt.parent / f"eval_{args.split}{'_pseudo' if args.pseudo else ''}.json"
+    out = ckpt.parent / f"eval_{args.split.replace(',', '+')}{'_pseudo' if args.pseudo else ''}.json"
     common.save_json(dict(checkpoint=str(ckpt), labels=args.labels, pseudo=args.pseudo, split=args.split,
                           kinds=args.kinds, frames=per_frame, threshold=args.threshold, map50=result.map50,
                           map50_95=result.map50_95, ap50=ap50, ap50_95=ap5095,

@@ -25,8 +25,9 @@ ml/coreml/out/
 # Capture-mode recordings copied off a phone (venue footage)
 research/capture_replay/captures/
 research/capture_replay/out/
-# ml/: frames, pre-labels, labels, Label Studio's database, datasets and training runs are venue data
-ml/data/
+# ml/: frames, pre-labels, labels, datasets and training runs are venue data. No trailing slash, so that a
+# worktree's ml/data symlink to the main checkout's folder is ignored too.
+ml/data
 ml/.venv*/
 # Model checkpoints, wherever they land
 *.pth

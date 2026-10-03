@@ -89,7 +89,8 @@ def git_commit() -> str:
 def train(dataset: Path, out: Path, device: str, args) -> None:
     from rfdetr import RFDETRNano
 
-    model = RFDETRNano()
+    # --init: start from an earlier fine-tuned checkpoint (a self-training round), else from the COCO weights
+    model = RFDETRNano(pretrain_weights=str(args.init), trust_checkpoint=True) if args.init else RFDETRNano()
     model.train(dataset_dir=str(dataset), output_dir=str(out), device=device, epochs=args.epochs,
                 batch_size=args.batch, grad_accum_steps=args.accum, lr=args.lr, num_workers=args.workers,
                 resolution=args.resolution, tensorboard=False, progress_bar=None, checkpoint_interval=max(1, args.epochs),
@@ -115,6 +116,7 @@ def main():
                                                              "val mAP (0: off)")
     ap.add_argument("--device", default="auto", choices=("auto", "mps", "cpu", "cuda"))
     ap.add_argument("--fp32", action="store_true", help="no mixed precision on CUDA either (MPS and CPU are always fp32)")
+    ap.add_argument("--init", help="start from this checkpoint instead of the COCO weights (autolabel.py's rounds)")
     args = ap.parse_args()
     if args.resolution % 32:
         raise SystemExit("--resolution must be a multiple of 32 (patch 16 x 2 windows)")
@@ -148,7 +150,7 @@ def main():
     run = dict(name=args.name, created=datetime.datetime.now().isoformat(timespec="seconds"), commit=git_commit(),
                labels=str(args.labels), pseudo=args.pseudo, classes=classes, counts=counts, device=used, tried=tried,
                first_error=error if len(tried) > 1 else None, minutes=round((time.time() - t0) / 60, 1),
-               settings=dict(epochs=args.epochs, batch=args.batch, accum=args.accum, lr=args.lr,
+               settings=dict(epochs=args.epochs, batch=args.batch, accum=args.accum, lr=args.lr, init=args.init,
                              resolution=args.resolution, fp32=args.fp32, patience=args.patience),
                checkpoint=str(out / "checkpoint_best_total.pth"))
     common.save_json(run, out / "run.json")
