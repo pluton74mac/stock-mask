@@ -10,8 +10,8 @@ What this adds over rfdetr's own `export(format="coreml")` (research/coreml_expo
   `logits` (1 x Q x C, before the sigmoid), as float32.
 - **Metadata the app reads** (creator-defined keys, all strings):
   - `stockmask.classes`: JSON list of class names by logit slot ("" for unused slots). The app
-    maps names to its classes (`bottle`, `can`, `case`, `bottle_top`) and ignores the rest, so a
-    fine-tuned model replaces the COCO one without code changes.
+    maps names to its classes (`bottle`, `can`, `case`, `bottle_top`, `carton`, `bag`) and ignores
+    the rest, so a fine-tuned model replaces the COCO one without code changes.
   - `stockmask.decoder` = `detr`, `stockmask.boxes`, `stockmask.logits`, `stockmask.num_select`,
     `stockmask.resize` = `stretch-bilinear`, `stockmask.score_shown`, `stockmask.score_commit`,
     `stockmask.source`.
@@ -48,6 +48,7 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 # Score thresholds the app starts from (walkthrough.py: shown, counted). A fine-tuned model can ship
 # its own through --score-shown / --score-commit.
 SCORE_SHOWN, SCORE_COMMIT = 0.3, 0.5
+APP_CLASSES = ("bottle", "can", "case", "bottle_top", "carton", "bag")  # ObjectClass in StockMaskCounting
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(HERE, "out", "StockMaskDetector.mlpackage")
 
@@ -198,7 +199,7 @@ def export(args) -> str:
     print(f"wrote {args.out} ({size / 1e6:.1f} MB)")
     print("inputs:", [(i.name, i.type.WhichOneof("Type")) for i in spec.description.input])
     print("outputs:", [(o.name, list(o.type.multiArrayType.shape)) for o in spec.description.output])
-    print("classes in use:", [(i, c) for i, c in enumerate(classes) if c in ("bottle", "can", "case", "bottle_top")])
+    print("classes in use:", [(i, c) for i, c in enumerate(classes) if c in APP_CLASSES])
     print("ops:", json.dumps(op_inventory(spec)))
     if sys.platform == "darwin" and not args.no_check:
         check(args.out, res, num_queries, num_slots)

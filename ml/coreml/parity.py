@@ -6,19 +6,22 @@ For a few frames of a video it runs:
 - **the same model in PyTorch on the 8-bit input Core ML gets** (the frame resized as `predict()`
   resizes it, then rounded to 8 bits): what part of any gap is only the 8-bit input;
 - **the exported package through coremltools, on each compute unit**, decoded exactly as the app
-  decodes it (`DETRDecoder.swift`: sigmoid, top-300 query/class pairs, cx cy w h -> corners). The
-  app runs CPU + GPU by default; ADR 001 planned the Neural Engine, which drifts on a Mac (see
-  RESULTS.md). With `--fp32-model`, also an FP32 export on the CPU, which checks the conversion.
+  decodes it (`DETRDecoder.swift`: sigmoid, top-300 query/class pairs, cx cy w h -> corners).
+  `CoreMLDetector` defaults to CPU + GPU, which decides pass or fail here. The app on the phone
+  asks for the Neural Engine for now, which drifts on a Mac (see RESULTS.md). With `--fp32-model`,
+  also an FP32 export on the CPU, which checks the conversion.
 
 Boxes are paired 1:1 by IoU (Hungarian, IoU >= 0.5, all boxes shown at >= 0.3). A run fails when
 a detection at >= 0.55 has no partner, or a pair has one score >= 0.55 and the other < 0.5 (the
-commit threshold is 0.5; scores within 0.05 of it may cross it on any rounding).
+commit threshold is 0.5; scores within 0.05 of it may cross it on any rounding). The same pairing,
+within each class, gives the agreement per class.
 
 It also writes, for the Swift test (CoreMLDetectorTests), each frame as a lossless PNG plus a JSON
 of the reference boxes. Frames come from venue footage, so everything goes to the git-ignored
 `out/parity/`. The clip's metadata (including GPS) is never read: frames are decoded with OpenCV.
 
-    python parity.py VIDEO [--model out/StockMaskDetector.mlpackage] [--fp32-model PATH] [--frames 6]
+    python parity.py VIDEO [VIDEO ...] [--model out/StockMaskDetector.mlpackage] [--fp32-model PATH] [--frames 6]
+    python parity.py VIDEO --weights ckpt.pth --model out/StockMaskDetector-x.mlpackage   # a fine-tuned model
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ from scipy.optimize import linear_sum_assignment
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 COMMIT, SHOWN, BORDER = 0.5, 0.3, 0.05
-OURS = ("bottle", "can", "case", "bottle_top")
+OURS = ("bottle", "can", "case", "bottle_top", "carton", "bag")  # ObjectClass in StockMaskCounting
 
 
 def pick_frames(video: str, n: int) -> list[tuple[float, np.ndarray]]:
@@ -110,16 +113,31 @@ def compare(ta, ts, ca, cs) -> dict:
                 mean_iou=float(np.mean([p[2] for p in pairs])) if pairs else 1.0,
                 min_iou=float(np.min([p[2] for p in pairs])) if pairs else 1.0,
                 max_dscore=float(max((abs(ts[i] - cs[j]) for i, j, _ in pairs), default=0.0)),
-                unpaired=len(lone), hard_unpaired=len(hard), flipped=len(flipped), ok=not hard and not flipped)
+                unpaired=len(lone), hard_unpaired=len(hard), flipped=len(flipped), ok=not hard and not flipped,
+                iou_sum=float(sum(p[2] for p in pairs)))
+
+
+def compare_by_class(ta, ts, tl, ca, cs, cl) -> dict:
+    """compare() within each class: a box that changed class counts as unpaired in both classes."""
+    out = {}
+    for c in OURS:
+        ti = [i for i, x in enumerate(tl) if x == c]
+        ci = [j for j, x in enumerate(cl) if x == c]
+        if ti or ci:
+            out[c] = compare(ta[ti] if ti else np.zeros((0, 4)), ts[ti] if ti else np.zeros(0),
+                             ca[ci] if ci else np.zeros((0, 4)), cs[ci] if ci else np.zeros(0))
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("video")
+    ap.add_argument("video", nargs="+", help="one or more clips; --frames are taken from each")
     ap.add_argument("--model", default=os.path.join(HERE, "out", "StockMaskDetector.mlpackage"))
+    ap.add_argument("--weights", help="the fine-tuned checkpoint the package was exported from (default: COCO weights)")
     ap.add_argument("--fp32-model", help="an FP32 export (export_detector.py --precision float32) to check the conversion")
-    ap.add_argument("--frames", type=int, default=6)
-    ap.add_argument("--out", default=os.path.join(HERE, "out", "parity"))
+    ap.add_argument("--frames", type=int, default=6, help="frames per clip")
+    ap.add_argument("--out", default=os.path.join(HERE, "out", "parity"),
+                    help="frames, fixtures and parity.json (git-ignored); use another folder for another model")
     args = ap.parse_args()
     if sys.platform != "darwin":
         raise SystemExit("Core ML predictions need macOS")
@@ -129,8 +147,8 @@ def main():
     from rfdetr import RFDETRNano
 
     cu = ct.ComputeUnit
-    app = "fp16 CPU+GPU (app default)"
-    runs = {app: (args.model, cu.CPU_AND_GPU), "fp16 CPU+NE (ADR 001's plan)": (args.model, cu.CPU_AND_NE),
+    app = "fp16 CPU+GPU (CoreMLDetector's default)"
+    runs = {app: (args.model, cu.CPU_AND_GPU), "fp16 CPU+NE (the app, for now)": (args.model, cu.CPU_AND_NE),
             "fp16 CPU": (args.model, cu.CPU_ONLY)}
     if args.fp32_model:
         runs["fp32 CPU"] = (args.fp32_model, cu.CPU_ONLY)
@@ -139,15 +157,23 @@ def main():
     classes = json.loads(meta["stockmask.classes"])
     num_select = int(meta["stockmask.num_select"])
     res = models[app].get_spec().description.input[0].type.imageType.width
-    rf = RFDETRNano()
+    if args.weights:
+        from export_detector import md5
+        if md5(args.weights) not in meta.get("stockmask.source", ""):
+            print(f"warning: {args.model} was not exported from {args.weights} (stockmask.source: "
+                  f"{meta.get('stockmask.source')})")
+    rf = RFDETRNano(pretrain_weights=args.weights) if args.weights else RFDETRNano()
     net = rf.model.model.eval()
     mean = torch.tensor(rf.means).view(1, 3, 1, 1)
     std = torch.tensor(rf.stds).view(1, 3, 1, 1)
     os.makedirs(args.out, exist_ok=True)
 
-    results: dict[str, list[dict]] = {name: [] for name in ["PyTorch, 8-bit input", *models]}
+    torch_8bit = "PyTorch, 8-bit input"
+    results: dict[str, list[dict]] = {name: [] for name in [torch_8bit, *models]}
+    by_class: dict[str, list[dict]] = {name: [] for name in results}
     latency: dict[str, list[float]] = {name: [] for name in models}
-    for k, (t, rgb) in enumerate(pick_frames(args.video, args.frames)):
+    frames = [(os.path.basename(v), t, rgb) for v in args.video for t, rgb in pick_frames(v, args.frames)]
+    for k, (clip, t, rgb) in enumerate(frames):
         h, w = rgb.shape[:2]
         name = f"frame_{k:02d}"
         cv2.imwrite(os.path.join(args.out, name + ".png"), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
@@ -158,6 +184,7 @@ def main():
         ta = (r.xyxy[keep] / [w, h, w, h]).astype(np.float64) if keep else np.zeros((0, 4))
         ts = r.confidence[keep].astype(np.float64) if keep else np.zeros(0)
         tl = [str(r.data["class_name"][i]) for i in keep]
+        tag = {"frame": name, "clip": clip, "t": round(t, 2)}
 
         # The 8-bit input Core ML gets: resized as predict() resizes (bilinear, no antialias), rounded.
         x = torch.from_numpy(rgb).permute(2, 0, 1).float() / 255
@@ -167,7 +194,8 @@ def main():
             o = net(((x8.float().unsqueeze(0) / 255 - mean) / std).to(dev))
         b, s, l = ours(*decode(o["pred_boxes"][0].cpu().numpy(), o["pred_logits"][0].cpu().numpy(), classes, SHOWN,
                                num_select))
-        results["PyTorch, 8-bit input"].append(compare(ta, ts, b, s) | {"frame": name})
+        results[torch_8bit].append(compare(ta, ts, b, s) | tag)
+        by_class[torch_8bit].append(compare_by_class(ta, ts, tl, b, s, l))
 
         image = Image.fromarray(x8.permute(1, 2, 0).numpy())
         for mname, m in models.items():
@@ -176,15 +204,16 @@ def main():
             out = m.predict({"image": image})
             latency[mname].append((time.perf_counter() - t0) * 1000)
             b, s, l = ours(*decode(out["boxes"][0], out["logits"][0], classes, SHOWN, num_select))
-            results[mname].append(compare(ta, ts, b, s) | {"frame": name})
+            results[mname].append(compare(ta, ts, b, s) | tag)
+            by_class[mname].append(compare_by_class(ta, ts, tl, b, s, l))
 
         fixture = dict(image=name + ".png", width=w, height=h, commit=COMMIT, shown=SHOWN,
                        torch=[dict(label=tl[i], score=float(ts[i]), box=[float(v) for v in ta[i]]) for i in range(len(ts))])
         with open(os.path.join(args.out, name + ".json"), "w") as f:
             json.dump(fixture, f, indent=1)
 
-    n = len(results["PyTorch, 8-bit input"])
-    ref_total = sum(r["reference"] for r in results["PyTorch, 8-bit input"])
+    n = len(results[torch_8bit])
+    ref_total = sum(r["reference"] for r in results[torch_8bit])
     print(f"{n} frames; reference (rfdetr predict on the full frame): {ref_total} detections >= {COMMIT}\n")
     print("| run | detections ≥ 0.5 | frames passing | pairs | mean IoU | min IoU | max Δscore | unpaired (≥ 0.55) | "
           "flipped across 0.5 | Mac latency ms |")
@@ -199,10 +228,31 @@ def main():
               f"{min(r['min_iou'] for r in rows):.3f} | {max(r['max_dscore'] for r in rows):.3f} | "
               f"{sum(r['unpaired'] for r in rows)} ({sum(r['hard_unpaired'] for r in rows)}) | "
               f"{sum(r['flipped'] for r in rows)} | {lat} |")
+
+    # Per class: boxes paired within the class, so a box that changed class is unpaired in both.
+    print("\n| class | run | reference ≥ 0.5 | run ≥ 0.5 | pairs | mean IoU | min IoU | max Δscore | "
+          "unpaired (≥ 0.55) | flipped across 0.5 |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for c in OURS:
+        for name, frames_c in by_class.items():
+            rows = [f[c] for f in frames_c if c in f]
+            if not rows:
+                continue
+            pairs = sum(r["pairs"] for r in rows)
+            agg = dict(reference=sum(r["reference"] for r in rows), candidate=sum(r["candidate"] for r in rows),
+                       pairs=pairs, mean_iou=sum(r["iou_sum"] for r in rows) / pairs if pairs else 1.0,
+                       min_iou=min(r["min_iou"] for r in rows), max_dscore=max(r["max_dscore"] for r in rows),
+                       unpaired=sum(r["unpaired"] for r in rows), hard_unpaired=sum(r["hard_unpaired"] for r in rows),
+                       flipped=sum(r["flipped"] for r in rows))
+            summary[name].setdefault("by_class", {})[c] = agg
+            print(f"| {c} | {name} | {agg['reference']} | {agg['candidate']} | {pairs} | {agg['mean_iou']:.3f} | "
+                  f"{agg['min_iou']:.3f} | {agg['max_dscore']:.3f} | {agg['unpaired']} ({agg['hard_unpaired']}) | "
+                  f"{agg['flipped']} |")
     with open(os.path.join(args.out, "parity.json"), "w") as f:
-        json.dump(dict(model=os.path.basename(args.model), reference_total=ref_total, runs=summary), f, indent=1)
+        json.dump(dict(model=os.path.basename(args.model), weights=os.path.basename(args.weights or "COCO"),
+                       reference_total=ref_total, runs=summary), f, indent=1)
     app_ok = summary[app]["ok"]
-    print(f"\nthe app's configuration ({app}): {'PASS' if app_ok else 'FAIL'}")
+    print(f"\n{app}: {'PASS' if app_ok else 'FAIL'}")
     sys.exit(0 if app_ok else 1)
 
 

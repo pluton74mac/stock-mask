@@ -94,3 +94,52 @@ the three newest commit keyframes, which stay on the phone.
 - **The app uses the Neural Engine for now** anyway: on 2 October nothing counted on the GPU. The
   reason was the detector's period, not its scores (StockMaskAR README, "GPU or Neural Engine").
   The GPU should take over again once the in-app log shows it counting with ARKit running.
+
+## The fine-tuned model: student 3 (`auto-r3`), 3 October 2026
+
+**Setup:**
+- Student 3 of the automatic labelling (`ml/AUTOLABEL.md`), six classes. Exported with
+  `export_detector.py --weights`: FP16, 54.2 MB.
+- The reference is rfdetr's `predict()` with the same checkpoint.
+- 24 frames: 8 sharp frames from each of the three bay clips of the second walk. They stay on the
+  Mac (git-ignored).
+
+```sh
+.venv/bin/python parity.py ../../research/walkthrough/videos/w2-bay{1,2,3}.MOV --frames 8 \
+    --weights ../data/runs/auto-r3/checkpoint_best_total.pth --model out/StockMaskDetector-auto-r3.mlpackage \
+    --fp32-model out/StockMaskDetector-auto-r3_fp32.mlpackage --out out/parity-auto-r3
+```
+
+The reference finds 266 detections at 0.5 or more.
+
+| run | detections ≥ 0.5 | frames passing | mean IoU | worst IoU | worst score change | unpaired at ≥ 0.55 | crossed 0.5 | Mac ms |
+|---|---|---|---|---|---|---|---|---|
+| PyTorch on the same 8-bit input | 268 | 24/24 | 0.997 | 0.952 | 0.090 | 0 | 0 | – |
+| Core ML FP32, CPU | 267 | 24/24 | 0.997 | 0.952 | 0.090 | 0 | 0 | 30 |
+| Core ML FP16, CPU + GPU | 268 | 23/24 | 0.995 | 0.954 | 0.120 | 1 | 0 | 6 |
+| Core ML FP16, CPU only | 264 | 24/24 | 0.993 | 0.912 | 0.148 | 0 | 0 | 15 |
+| Core ML FP16, CPU + Neural Engine | 246 | 10/24 | 0.942 | 0.503 | 0.574 | 11 | 11 | 8 |
+
+**By class** (boxes paired within the class; detections at 0.5 or more):
+
+| class | reference | GPU | Neural Engine | mean IoU, GPU / NE | unpaired at ≥ 0.55 or crossed 0.5, GPU / NE |
+|---|---|---|---|---|---|
+| bottle | 98 | 98 | 96 | 0.997 / 0.939 | 1 / 3 |
+| bottle_top | 162 | 164 | 144 | 0.994 / 0.946 | 0 / 19 |
+| can | 4 | 4 | 4 | 0.998 / 0.919 | 0 / 0 |
+| case | 2 | 2 | 2 | 0.998 / 0.921 | 0 / 0 |
+| carton | 0 (2 boxes at 0.3–0.5) | 0 | 0 | 0.999 / 0.995 | 0 / 0 |
+| bag | none at 0.3 | – | – | – | – |
+
+- **The conversion is exact again:** FP32 Core ML gives what PyTorch gives on the same input.
+- **FP16 on the GPU fails one frame of 24, on a duplicate box.** A second query on a close-up
+  bottle overlaps the first at IoU 0.99. The reference scores it 0.05. On the 8-bit input,
+  PyTorch and FP32 Core ML score it 0.50, and the GPU 0.57. So the input's rounding does most of
+  it, and FP16 tips it over 0.55. DETR has no NMS. Neither the app's decoder nor the commit engine
+  merges two bottle boxes on one object (`TopMerge` pairs tops with bottles only), so a duplicate
+  at 0.5 or more would likely count twice.
+- **The Neural Engine drifts as it did with the COCO weights, mostly on bottle tops:** 144 of 162.
+  Ten confident tops go unpaired and 9 cross 0.5. The app asks for the Neural Engine for now
+  (above).
+- **Tins, cartons and bags are too rare in this model's output to judge.** Student 3 finds few of
+  them (`ml/AUTOLABEL.md`).

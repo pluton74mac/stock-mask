@@ -45,7 +45,7 @@ in the app:
 
 | Key | Example | Used for |
 |---|---|---|
-| `stockmask.classes` | `["", "person", …, "bottle", …]` (JSON, by logit slot; "" = unused) | The class list. The app keeps the names that are its classes (`bottle`, `can`, `case`, `bottle_top`) and ignores the rest. COCO checkpoints use the sparse category id as the slot (bottle = 44); fine-tuned ones use 0-based indices into their class names. |
+| `stockmask.classes` | `["", "person", …, "bottle", …]` (JSON, by logit slot; "" = unused) | The class list. The app keeps the names that are its classes (`bottle`, `can`, `case`, `bottle_top`, `carton`, `bag`) and ignores the rest. COCO checkpoints use the sparse category id as the slot (bottle = 44); fine-tuned ones use 0-based indices into their class names. |
 | `stockmask.decoder` | `detr` | How to decode: `detr` (these outputs), or `vision` for a model Vision reads as objects (e.g. a YOLO with Core ML's NMS stage) |
 | `stockmask.boxes`, `stockmask.logits` | `boxes`, `logits` | Output names |
 | `stockmask.num_select` | `300` | rfdetr's top-k over query/class pairs |
@@ -63,15 +63,26 @@ it (below) or copy it to the app's Documents/Models folder on the phone.
 .venv/bin/python parity.py ../../research/walkthrough/videos/w2-bay2.MOV --fp32-model out/StockMaskDetector_fp32.mlpackage
 ```
 
-It picks 6 sharp frames across the clip and compares rfdetr's own `predict()` with:
+For a fine-tuned model, pass the checkpoint it was exported from as the reference, and keep its
+frames apart from the COCO model's:
+
+```sh
+.venv/bin/python parity.py ../../research/walkthrough/videos/w2-bay{1,2,3}.MOV --frames 8 \
+    --weights ../data/runs/auto-r3/checkpoint_best_total.pth --model out/StockMaskDetector-auto-r3.mlpackage \
+    --fp32-model out/StockMaskDetector-auto-r3_fp32.mlpackage --out out/parity-auto-r3
+```
+
+It picks `--frames` sharp frames across each clip and compares rfdetr's own `predict()` with:
 - the same model in PyTorch on the 8-bit input Core ML gets;
 - the package on each compute unit;
 - the FP32 export.
 
-It exits non-zero when the app's configuration (FP16 on CPU + GPU) fails. The frames are decoded
-with OpenCV, so the clip's metadata, GPS included, is never read. It also leaves the frames as PNG,
-with PyTorch's boxes as JSON, in `out/parity/`. `StockMaskAR`'s `CoreMLDetectorTests` runs the
-Swift path on those frames.
+It prints the agreement over all boxes, then per class (boxes paired within the class). It exits
+non-zero when FP16 on CPU + GPU (`CoreMLDetector`'s default) fails. The frames are decoded with
+OpenCV, so the clip's metadata, GPS included, is never read. It also leaves the frames as PNG,
+with PyTorch's boxes as JSON, in `out/parity/` (or `--out`). `StockMaskAR`'s `CoreMLDetectorTests`
+runs the Swift path on those frames; `STOCKMASK_DETECTOR_PACKAGE` and `STOCKMASK_PARITY_DIR` point
+it at another model and its frames.
 
 ADR 002 asks for this check on 200 test images before release. Run the same script on the
 labelled holdout set when the fine-tuned model exists.
