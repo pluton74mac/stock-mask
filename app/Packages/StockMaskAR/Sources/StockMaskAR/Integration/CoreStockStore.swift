@@ -55,8 +55,7 @@ public final class CoreStockStore: CountingStore, @unchecked Sendable {
 
     public func startSession(venue name: String, zone zoneName: String, counter: String) async throws {
         try await run { [self] in
-            let venue = try store.venues().first { $0.name == name }
-                ?? store.createVenue(name: name, country: "AR", locale: "es_AR")
+            let venue = try venue(named: name)
             let zone = try store.zones(venueID: venue.id).first { $0.name == zoneName }
                 ?? store.addZone(venueID: venue.id, name: zoneName)
             session = try store.startSession(venueID: venue.id, counterName: counter, zoneIDs: [zone.id], startZoneID: zone.id)
@@ -125,6 +124,47 @@ public final class CoreStockStore: CountingStore, @unchecked Sendable {
 
     public func products(matching query: String) async throws -> [ProductInfo] {
         try await run { [self] in try store.searchSKUs(venueID: try current().venueID, matching: query).map(Self.product) }
+    }
+
+    public func catalog() async throws -> [ProductInfo] {
+        try await run { [self] in try store.skus(venueID: try current().venueID).map(Self.product) }
+    }
+
+    public func moveItems(_ ids: [UUID], toGroup groupID: UUID) async throws -> GroupInfo {
+        try await run { [self] in
+            _ = try store.moveItems(ids, toGroup: groupID)
+            return try group(groupID)
+        }
+    }
+
+    // MARK: the catalogue (FR-4), before or during a count
+
+    /// The venue the test app counts in.
+    public static let defaultVenue = "Test venue"
+
+    /// Imports a product list (CSV: Excel's "CSV UTF-8", plain CSV, Google Sheets, tab-separated)
+    /// with StockMaskCore's suggested column mapping. Duplicates and rows without a name are skipped.
+    public func importCatalog(csv: Data, venue name: String = CoreStockStore.defaultVenue) async throws -> CatalogImportSummary {
+        try await run { [self] in
+            let venue = try venue(named: name)
+            let plan = try store.planCatalogImport(venueID: venue.id, csv: csv)
+            let nameColumn = plan.mapping[.name].flatMap { $0 < plan.header.count ? plan.header[$0] : nil }
+            let result = try store.applyCatalogImport(plan)
+            return CatalogImportSummary(rows: plan.rows.count, created: result.created.count, updated: result.updated.count,
+                                        skipped: result.skipped, flagged: plan.flaggedRows.count,
+                                        products: try store.skus(venueID: venue.id).count, nameColumn: nameColumn)
+        }
+    }
+
+    public func productCount(venue name: String = CoreStockStore.defaultVenue) async -> Int {
+        (try? await run { [self] in
+            guard let v = try store.venues().first(where: { $0.name == name }) else { return 0 }
+            return try store.skus(venueID: v.id).count
+        }) ?? 0
+    }
+
+    private func venue(named name: String) throws -> Venue {
+        try store.venues().first { $0.name == name } ?? store.createVenue(name: name, country: "AR", locale: "es_AR")
     }
 
     public func createProduct(_ d: ProductDraft) async throws -> ProductInfo {
@@ -201,20 +241,21 @@ public final class CoreStockStore: CountingStore, @unchecked Sendable {
         let items = try store.items(inGroup: id)
         var counts: [ItemClass: Int] = [:]
         for i in items { counts[i.cls.countsAs, default: 0] += 1 }
-        return try info(g, itemIDs: items.map(\.id), counts: counts)
+        return try info(g, itemIDs: items.map(\.id), counts: counts, crops: items.compactMap(\.cropPath))
     }
 
-    private func info(_ g: ItemGroup, itemIDs: [UUID], counts: [ItemClass: Int]) throws -> GroupInfo {
+    private func info(_ g: ItemGroup, itemIDs: [UUID], counts: [ItemClass: Int], crops: [String]? = nil) throws -> GroupInfo {
         let kind = counts.max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key ?? .bottle
+        let cropPaths = try crops ?? store.items(inGroup: g.id).compactMap(\.cropPath)
         return GroupInfo(id: g.id, commitID: g.commitID ?? UUID(), label: "\(options.unknownName) \(g.label)",
                          cls: ObjectClass(rawValue: kind.rawValue) ?? .bottle, itemIDs: itemIDs,
                          product: try g.skuID.flatMap { try store.sku(id: $0) }.map(Self.product),
-                         markedUnknown: g.state == .markedUnknown)
+                         markedUnknown: g.state == .markedUnknown, cropPaths: cropPaths)
     }
 
     static func product(_ s: SKU) -> ProductInfo {
         ProductInfo(id: s.id, name: s.name, sizeML: s.sizeML, unitsPerCase: s.unitsPerCase, code: s.code ?? "",
-                    productKey: s.productKey)
+                    brand: s.brand ?? "", productKey: s.productKey)
     }
 
     static func itemClass(_ c: ObjectClass) -> ItemClass { ItemClass(rawValue: c.rawValue) ?? .bottle }

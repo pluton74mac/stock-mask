@@ -89,6 +89,41 @@ struct CoreMLDetectorTests {
         #expect(failures.isEmpty, "frames with a confident box on one side only: \(failures)")
     }
 
+    /// The app's benchmark on the Mac: every compute unit times, and on the parity frames (when
+    /// present) the GPU and the CPU against the Neural Engine. A score-scale problem on one unit
+    /// would show as a mean signed difference, not just spread.
+    @Test func benchmarkRunsEveryComputeUnit() async throws {
+        let compiled = try await DetectorModelLocator.compiled(LocalModel.package, cache: LocalModel.cache)
+        let frames = try LocalModel.parityFrames.map { url in
+            let fixture = try JSONDecoder().decode(ParityFixture.self, from: Data(contentsOf: url))
+            return DetectorInput(image: try #require(Self.load(LocalModel.parity.appendingPathComponent(fixture.image))))
+        }
+        let stages = StageLog()
+        let results = await DetectorBenchmark.runWithDetections(compiledModelURL: compiled, runs: 3, frames: frames,
+                                                                stage: { await stages.add($0) })
+        #expect(results.map(\.result.computeUnits) == ["GPU", "Neural Engine", "CPU"])
+        #expect(await stages.all.first == "loading the model on the GPU")
+        for r in results.map(\.result) {
+            #expect(r.error == nil && r.p50Ms != nil && r.frames.count == frames.count)
+            #expect(r.outputs.contains("boxes") && r.outputs.contains("logits"))
+            print("benchmark \(r.computeUnits): load \(Int(r.loadMs ?? -1)) ms, first \(Int(r.firstMs ?? -1)) ms, "
+                  + "p50 \(Int(r.p50Ms ?? -1)) ms; outputs \(r.outputs); commit-level per frame \(r.frames.map(\.commit))")
+        }
+        let ane = try #require(results.first { $0.result.computeUnits == "Neural Engine" })
+        for other in results where other.result.computeUnits != "Neural Engine" && !frames.isEmpty {
+            let c = DetectorBenchmark.compare(("Neural Engine", ane.detections), (other.result.computeUnits, other.detections),
+                                              commitScore: ane.commitScore)
+            print("\(c.other) vs Neural Engine: \(c.paired) pairs, mean Δ \(c.meanDelta ?? .nan), mean |Δ| \(c.meanAbsDelta ?? .nan), "
+                  + "max |Δ| \(c.maxAbsDelta ?? .nan), \(c.commitFlips) across 0.5, unpaired \(c.onlyReference)/\(c.onlyOther)")
+            #expect(abs(c.meanDelta ?? 0) < 0.05)   // same score scale
+        }
+    }
+
+    actor StageLog {
+        var all: [String] = []
+        func add(_ s: String) { all.append(s) }
+    }
+
     struct Comparison { var reference = 0, candidate = 0, pairs = 0; var meanIoU: Float = 1, maxDelta: Float = 0; var ok = true }
 
     /// Greedy 1:1 pairing by IoU (best first); fails on a confident box (>= threshold + 0.05) without

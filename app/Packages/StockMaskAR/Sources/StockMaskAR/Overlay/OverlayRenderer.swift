@@ -2,6 +2,7 @@
 import Foundation
 import RealityKit
 import StockMaskCounting
+import simd
 #if os(macOS)
 import AppKit
 typealias PlatformColor = NSColor
@@ -95,10 +96,12 @@ public final class OverlayRenderer {
                                materials: [Self.material(Self.green, opacity: 0.12)])
         tint.name = "zone:\(c.id.uuidString)"
         root.addChild(tint)
+        let upright = Self.upright(in: c.anchor)
         for item in c.items {
             let e = ModelEntity(mesh: Self.mesh(item.cls), materials: [Self.material(Self.green, opacity: 0.4)])
             e.name = "item:\(item.id.uuidString)"
             e.position = item.local
+            e.orientation = upright
             root.addChild(e)
         }
         for miss in c.misses {
@@ -112,6 +115,26 @@ public final class OverlayRenderer {
             plus.components.set(CollisionComponent(shapes: [.generateBox(size: SIMD3(0.09, 0.09, 0.04))]))
             root.addChild(plus)
         }
+    }
+
+    /// The rotation, in the anchor's space, that stands a shape upright in the world (ARKit's +y is
+    /// up, against gravity) with its front (+z) turned to the zone's, flattened to the horizontal.
+    /// A counted zone's axes are the camera's (the sensor's, landscape), so a shape left in the
+    /// anchor's axes lies on its side whenever the phone isn't held in landscape.
+    static func upright(in anchor: simd_float4x4) -> simd_quatf {
+        func axis(_ c: SIMD4<Float>) -> SIMD3<Float> {
+            let v = SIMD3(c.x, c.y, c.z)
+            return simd_length(v) > 1e-6 ? simd_normalize(v) : v
+        }
+        let x = axis(anchor.columns.0), y = axis(anchor.columns.1), z = axis(anchor.columns.2)
+        var front = SIMD3<Float>(z.x, 0, z.z)
+        if simd_length(front) < 1e-3 { front = SIMD3(y.x, 0, y.z) }   // a zone facing straight up or down
+        if simd_length(front) < 1e-3 { front = SIMD3(0, 0, 1) }
+        front = simd_normalize(front)
+        let up = SIMD3<Float>(0, 1, 0)
+        let world = simd_float3x3(simd_normalize(simd_cross(up, front)), up, front)
+        // anchor rotation⁻¹ × world (the anchor's rotation is orthonormal: its inverse is its transpose)
+        return simd_normalize(simd_quatf(simd_float3x3(x, y, z).transpose * world))
     }
 
     static let green = (r: 0.27, g: 0.85, b: 0.35)

@@ -13,13 +13,14 @@ public struct ProductInfo: Sendable, Identifiable, Equatable, Hashable {
     public var sizeML: Int?
     public var unitsPerCase: Int?
     public var code: String
+    public var brand: String
     /// StockMaskCounting's `productKey` for this product (stable: from the SKU's id).
     public var productKey: Int?
 
     public init(id: UUID, name: String, sizeML: Int? = nil, unitsPerCase: Int? = nil, code: String = "",
-                productKey: Int? = nil) {
+                brand: String = "", productKey: Int? = nil) {
         self.id = id; self.name = name; self.sizeML = sizeML; self.unitsPerCase = unitsPerCase; self.code = code
-        self.productKey = productKey
+        self.brand = brand; self.productKey = productKey
     }
 
     public var title: String { sizeML.map { "\(name) \($0) ml" } ?? name }
@@ -47,11 +48,13 @@ public struct GroupInfo: Sendable, Identifiable, Equatable {
     public var itemIDs: [UUID]
     public var product: ProductInfo?
     public var markedUnknown = false
+    /// The items' photo crops, relative to the app's data directory (the naming card shows them).
+    public var cropPaths: [String] = []
 
     public init(id: UUID, commitID: UUID, label: String, cls: ObjectClass, itemIDs: [UUID], product: ProductInfo?,
-                markedUnknown: Bool = false) {
+                markedUnknown: Bool = false, cropPaths: [String] = []) {
         self.id = id; self.commitID = commitID; self.label = label; self.cls = cls; self.itemIDs = itemIDs
-        self.product = product; self.markedUnknown = markedUnknown
+        self.product = product; self.markedUnknown = markedUnknown; self.cropPaths = cropPaths
     }
 
     public var count: Int { itemIDs.count }
@@ -166,6 +169,31 @@ public struct ResumedSession: Sendable, Equatable {
     public var units: Int
 }
 
+/// What a catalogue import did (FR-4).
+public struct CatalogImportSummary: Sendable, Equatable {
+    public var rows: Int
+    public var created: Int
+    public var updated: Int
+    public var skipped: Int    // duplicates and rows without a name
+    public var flagged: Int    // rows with an issue or a duplicate
+    public var products: Int   // in the catalogue afterwards
+    /// The header of the column read as the product's name; nil when no column looked like one.
+    public var nameColumn: String?
+
+    public init(rows: Int, created: Int, updated: Int = 0, skipped: Int, flagged: Int, products: Int, nameColumn: String?) {
+        self.rows = rows; self.created = created; self.updated = updated; self.skipped = skipped
+        self.flagged = flagged; self.products = products; self.nameColumn = nameColumn
+    }
+
+    public var text: String {
+        guard let nameColumn else {
+            return "No column looks like the product name (Nombre, Producto, Descripción, Name…): nothing imported."
+        }
+        return "\(created) new\(updated > 0 ? ", \(updated) updated" : ""), \(skipped) skipped (duplicates or no name) "
+            + "of \(rows) rows; names from “\(nameColumn)”. \(products) products in the catalogue."
+    }
+}
+
 /// What the counting screens need from persistence. `CoreStockStore` implements it.
 public protocol CountingStore: Sendable {
     /// Continues the active session, if there is one (one per device), else nil.
@@ -187,7 +215,12 @@ public protocol CountingStore: Sendable {
     /// FR-35: leave a group deliberately unknown.
     func markUnknown(group id: UUID) async throws -> GroupInfo
     func products(matching query: String) async throws -> [ProductInfo]
+    /// Every product of the venue (for matching label text).
+    func catalog() async throws -> [ProductInfo]
     func createProduct(_ draft: ProductDraft) async throws -> ProductInfo
+    /// Moves items into another group (a row behind joining the bottle in front). They take the
+    /// group's product. Returns the group.
+    func moveItems(_ ids: [UUID], toGroup group: UUID) async throws -> GroupInfo
     func addManualLine(product: UUID, fullCases: Int, looseUnits: Int, note: String) async throws
     func sheet() async throws -> StockSheetSummary
     /// FR-9: finish, review, lock (needs every group named or marked unknown).

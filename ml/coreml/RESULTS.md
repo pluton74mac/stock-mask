@@ -76,3 +76,21 @@ Notes on the table:
 - **Rerun this on the fine-tuned model.** A model trained on our classes may have wider score
   margins, which makes FP16 drift matter less. ADR 002 asks for 200 holdout images before release.
 - The GPU's 6 ms on an M5 says nothing yet about an A15 with RealityKit rendering at 60 fps.
+
+## On the phone, 3 October 2026
+
+The app's detector benchmark (StockMaskAR README, "Diagnostics") on an iPhone 14 Pro Max (A16),
+Debug build, ARKit off. Times are end to end (resize 11 ms, Core ML, decoding); the scores are on
+the three newest commit keyframes, which stay on the phone.
+
+| | load | p50 | p95 | detections ≥ 0.5 |
+|---|---|---|---|---|
+| CPU + GPU | 0.6 s | 65 ms | 67 ms | 15 |
+| CPU + Neural Engine | 5.2 s (compiles once per install) | 39 ms | 41 ms | 12 |
+| CPU only | 0.6 s | 57 ms | 58 ms | 15 |
+
+- **The A16's Neural Engine drifts like the M5's.** Against it, the GPU's scores are 0.02 higher on
+  average (worst 0.19), and the GPU and the CPU agree with each other.
+- **The app uses the Neural Engine for now** anyway: on 2 October nothing counted on the GPU. The
+  reason was the detector's period, not its scores (StockMaskAR README, "GPU or Neural Engine").
+  The GPU should take over again once the in-app log shows it counting with ARKit running.

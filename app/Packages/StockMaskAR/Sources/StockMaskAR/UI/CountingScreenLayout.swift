@@ -9,16 +9,19 @@ public struct CountingScreenLayout<Camera: View, HUD: View>: View {
     let camera: Camera
     let hud: HUD
     let torch: Binding<Bool>?
+    let onClose: (() -> Void)?
     @State private var showList = false
     @State private var showReview = false
     @State private var showHUD = false
     @State private var naming: GroupInfo?
 
-    public init(session: CountingSession, mapping: DisplayMapping?, torch: Binding<Bool>? = nil,
+    /// `onClose` goes back to the start screen; the count stays saved and can be continued.
+    public init(session: CountingSession, mapping: DisplayMapping?, torch: Binding<Bool>? = nil, onClose: (() -> Void)? = nil,
                 @ViewBuilder camera: () -> Camera, @ViewBuilder hud: () -> HUD) {
         self.session = session
         self.mapping = mapping
         self.torch = torch
+        self.onClose = onClose
         self.camera = camera()
         self.hud = hud()
     }
@@ -38,6 +41,12 @@ public struct CountingScreenLayout<Camera: View, HUD: View>: View {
                     BannerView(text: notice, action: ("OK", { session.notice = nil }))
                 }
                 HStack {
+                    if let onClose {
+                        Button(action: onClose) {
+                            Image(systemName: "chevron.backward").font(.title3.weight(.semibold)).frame(width: 60, height: 60)
+                        }
+                        .accessibilityLabel("Back to the start screen (the count stays saved)")
+                    }
                     if let error = session.lastError {
                         Text(error).font(.caption2).foregroundStyle(.orange).lineLimit(2)
                     }
@@ -65,7 +74,10 @@ public struct CountingScreenLayout<Camera: View, HUD: View>: View {
                     ToastView(toast: toast) { session.clearToast($0) }
                 }
                 if let card = session.card {
-                    CommitCardView(card: card, onName: { naming = $0 }, onDismiss: { session.dismissCard() })
+                    CommitCardView(card: card, suggestions: session.suggestions, reading: session.readingLabels,
+                                   photoDirectory: session.dataDirectory, onName: { naming = $0 },
+                                   onConfirm: { g in Task { await session.confirmSuggestion(for: g) } },
+                                   onDismiss: { session.dismissCard() })
                 }
                 CountingControls(session: session) { showList = true }
             }
@@ -81,7 +93,9 @@ public struct CountingScreenLayout<Camera: View, HUD: View>: View {
         }
         .sheet(isPresented: $showReview) { ReviewView(session: session) }
         .sheet(item: $naming) { g in
-            ProductPickerView(title: "Name \(g.count) × \(g.cls.displayName)", search: { await session.products(matching: $0) },
+            ProductPickerView(title: "Name \(g.count) × \(g.cls.displayName)", suggestion: session.suggestions[g.id],
+                              photos: g.cropPaths, photoDirectory: session.dataDirectory,
+                              search: { await session.products(matching: $0) },
                               create: { await session.createProduct($0) }) { product in
                 Task { await session.name(group: g, product: product) }
             }

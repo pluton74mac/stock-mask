@@ -24,10 +24,11 @@ public enum DetectorError: Error, CustomStringConvertible {
 /// - `vision`: a model Vision reads as object observations (e.g. YOLO with Core ML's NMS stage);
 ///   Vision does the resize.
 ///
-/// An actor, so one frame is in flight at a time (ADR 001). Compute units: ADR 001 planned the
-/// Neural Engine, but on an M5 Mac its FP16 output fails parity with PyTorch while the GPU's
-/// passes (`ml/coreml/RESULTS.md`). The default is CPU + GPU until P0-3 measures the phone; the
-/// debug HUD can switch.
+/// An actor, so one frame is in flight at a time (ADR 001). Compute units: the app asks for the
+/// Neural Engine (ADR 001; on the phone nothing counted on the GPU, see StockMaskAR's README, "GPU
+/// or Neural Engine"), although on an M5 Mac its FP16 output fails parity with PyTorch while the
+/// GPU's passes (`ml/coreml/RESULTS.md`). This initialiser's default stays CPU + GPU for the
+/// parity tests; the debug HUD switches.
 public actor CoreMLDetector: Detector {
     public nonisolated let info: DetectorInfo
     public nonisolated let computeUnits: MLComputeUnits
@@ -36,6 +37,9 @@ public actor CoreMLDetector: Detector {
     private let inputName: String
     private let metadata: ModelMetadata
     private let decoder: DETRDecoder
+    /// The last outputs' names, element types, shapes and strides (diagnostics: does the GPU hand
+    /// back what the Neural Engine does?).
+    public private(set) var lastOutputInfo = ""
 
     public init(compiledModelURL url: URL, computeUnits: MLComputeUnits = .cpuAndGPU) throws {
         let config = MLModelConfiguration()
@@ -93,6 +97,9 @@ public actor CoreMLDetector: Detector {
         guard let logits = out.featureValue(for: metadata.logitsOutput)?.multiArrayValue else {
             throw DetectorError.missingOutput(metadata.logitsOutput)
         }
+        lastOutputInfo = [(metadata.boxesOutput, boxes), (metadata.logitsOutput, logits)].map { name, a in
+            "\(name) \(Self.typeName(a.dataType)) \(a.shape.map(\.intValue)) strides \(a.strides.map(\.intValue))"
+        }.joined(separator: "; ")
         let queries = boxes.shape.count >= 2 ? boxes.shape[boxes.shape.count - 2].intValue : boxes.count / 4
         return decoder.decode(boxes: MultiArrayReader.floats(boxes), logits: MultiArrayReader.floats(logits),
                               queries: queries, threshold: info.scoreShown)
@@ -116,6 +123,18 @@ public actor CoreMLDetector: Detector {
                                            box: SIMD4(Float(b.minX), Float(1 - b.maxY), Float(b.maxX), Float(1 - b.minY))))
         }
         return detections
+    }
+}
+
+extension CoreMLDetector {
+    static func typeName(_ t: MLMultiArrayDataType) -> String {
+        switch t {
+        case .float32: "float32"
+        case .float16: "float16"
+        case .double: "double"
+        case .int32: "int32"
+        default: "type \(t.rawValue)"
+        }
     }
 }
 
