@@ -23,9 +23,12 @@ public final class ARSessionController {
     public private(set) var displayMapping: DisplayMapping?
     public private(set) var detectorStatus = "Loading the detector…"
     public private(set) var errorMessage: String?
-    /// The Neural Engine is the default: on the GPU nothing counted on the phone (2 October), while
-    /// the Neural Engine counted. See StockMaskAR's README, "GPU or Neural Engine".
-    public var useNeuralEngine = true { didSet { if useNeuralEngine != oldValue { loadDetector() } } }
+    /// The GPU is the default (3 October). It counts since the input resize got 13x faster.
+    /// Against PyTorch, the fine-tuned model in FP16 on CPU + GPU matches on 23 of 24 frames,
+    /// while the Neural Engine drifts (10 of 24 frames; about 1 in 10 bottle tops lost)
+    /// (ml/coreml/RESULTS.md). The HUD switch still tries the Neural Engine. See StockMaskAR's
+    /// README, "GPU or Neural Engine".
+    public var useNeuralEngine = false { didSet { if useNeuralEngine != oldValue { loadDetector() } } }
     /// Lift from `smoothedSceneDepth` instead of `sceneDepth` (P0-4 compares them).
     public var smoothedDepth = false
     public var torchOn = false { didSet { setTorch(torchOn) } }

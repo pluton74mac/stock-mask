@@ -117,6 +117,17 @@ ARFrame (ARSessionController, iOS)
 
 ### GPU or Neural Engine
 
+**Since 3 October the GPU is the default.** The resize fix below made the GPU count. Against
+PyTorch, the fine-tuned model (student 3, `ml/coreml/RESULTS.md`) gives:
+- FP16 on CPU + GPU: matches on 23 of 24 frames.
+- The Neural Engine: matches on 10 of 24 frames, and loses about 1 in 10 bottle tops.
+
+The HUD switch still tries the Neural Engine. `CoreMLDetector` also drops a second box of the
+same label at IoU ≥ 0.7 (`DETRDecoder.deduplicated`). The fine-tuned model drew one on a close-up
+bottle, and it would have counted twice.
+
+**History:** what happened on 2 October.
+
 On 2 October the phone counted with the Neural Engine and never with the GPU: yellow outlines
 showed, but no commit came. The cause is the stable-candidate rule meeting a slow detector:
 

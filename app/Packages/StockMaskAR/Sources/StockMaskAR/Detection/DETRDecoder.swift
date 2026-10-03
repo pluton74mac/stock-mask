@@ -41,4 +41,26 @@ public struct DETRDecoder: Sendable, Equatable {
             return RawDetection(label: label, score: p.score, box: box)
         }
     }
+
+    /// Drops a box of the same label that overlaps a higher-scoring one by at least `iou`. DETR
+    /// models rarely draw two boxes on one object, but the fine-tuned model of 3 October did: a
+    /// close-up bottle got a second box at IoU 0.99 (ml/coreml/RESULTS.md), and the commit engine
+    /// would have counted it twice. Applied after `decode`, so `decode` itself stays rfdetr's.
+    public static func deduplicated(_ detections: [RawDetection], iou: Float = 0.7) -> [RawDetection] {
+        var kept: [RawDetection] = []
+        for d in detections.sorted(by: { $0.score > $1.score }) {
+            let duplicate = kept.contains { k in
+                k.label == d.label && Self.iou(k.box, d.box) >= iou
+            }
+            if !duplicate { kept.append(d) }
+        }
+        return kept
+    }
+
+    static func iou(_ a: SIMD4<Float>, _ b: SIMD4<Float>) -> Float {
+        let ix = max(0, min(a.z, b.z) - max(a.x, b.x)), iy = max(0, min(a.w, b.w) - max(a.y, b.y))
+        let inter = ix * iy
+        let union = (a.z - a.x) * (a.w - a.y) + (b.z - b.x) * (b.w - b.y) - inter
+        return union > 0 ? inter / union : 0
+    }
 }

@@ -101,8 +101,9 @@ public actor CoreMLDetector: Detector {
             "\(name) \(Self.typeName(a.dataType)) \(a.shape.map(\.intValue)) strides \(a.strides.map(\.intValue))"
         }.joined(separator: "; ")
         let queries = boxes.shape.count >= 2 ? boxes.shape[boxes.shape.count - 2].intValue : boxes.count / 4
-        return decoder.decode(boxes: MultiArrayReader.floats(boxes), logits: MultiArrayReader.floats(logits),
-                              queries: queries, threshold: info.scoreShown)
+        return DETRDecoder.deduplicated(decoder.decode(boxes: MultiArrayReader.floats(boxes),
+                                                       logits: MultiArrayReader.floats(logits),
+                                                       queries: queries, threshold: info.scoreShown))
     }
 
     private func detectWithVision(_ vision: VNCoreMLModel, _ input: DetectorInput) throws -> [RawDetection] {
