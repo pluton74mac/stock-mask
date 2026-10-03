@@ -53,7 +53,8 @@ public struct LiveListView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Finish → Review", action: onReview) }
             }
             .sheet(item: $naming) { line in
-                ProductPickerView(title: "Name \(line.label)", search: { await session.products(matching: $0) },
+                ProductPickerView(title: "Name \(line.label)", suggestion: line.groupID.flatMap { session.suggestions[$0] },
+                                  search: { await session.products(matching: $0) },
                                   create: { await session.createProduct($0) }) { product in
                     Task { await session.name(line: line, product: product) }
                 }
@@ -206,7 +207,8 @@ public struct ReviewView: View {
             }
             .navigationTitle("Review")
             .sheet(item: $naming) { line in
-                ProductPickerView(title: "Name \(line.label)", search: { await session.products(matching: $0) },
+                ProductPickerView(title: "Name \(line.label)", suggestion: line.groupID.flatMap { session.suggestions[$0] },
+                                  search: { await session.products(matching: $0) },
                                   create: { await session.createProduct($0) }) { product in
                     Task { await session.name(line: line, product: product) }
                 }
@@ -216,26 +218,52 @@ public struct ReviewView: View {
     }
 }
 
+/// The start screen's catalogue step (FR-4): the product list that suggested names come from.
+public struct CatalogStep: Sendable, Equatable {
+    public var products: Int
+    /// CSV files found in the app's Documents folder (the Files app and Finder show it).
+    public var files: [URL]
+    public var importing: Bool
+    public var message: String?
+
+    public init(products: Int = 0, files: [URL] = [], importing: Bool = false, message: String? = nil) {
+        self.products = products
+        self.files = files
+        self.importing = importing
+        self.message = message
+    }
+}
+
 /// Start count (PRD §7): who counts and which zone; or continue the count in progress (FR-7: one
-/// active session per device). One venue and one zone per session in the test app.
+/// active session per device). One venue and one zone per session in the test app. Below, the
+/// product catalogue: import a CSV the owner put in the app's folder.
 public struct StartView: View {
     @State private var counter = ""
     @State private var zone = "Storeroom"
     let resumable: ResumedSession?
+    let catalog: CatalogStep?
+    let onImport: (URL) -> Void
+    let onRefreshCatalog: () -> Void
     let onResume: () -> Void
     let onStart: (_ counter: String, _ zone: String) -> Void
+    let benchmark: BenchmarkStep?
 
-    public init(resumable: ResumedSession? = nil, onResume: @escaping () -> Void = {},
-                onStart: @escaping (_ counter: String, _ zone: String) -> Void) {
+    public init(resumable: ResumedSession? = nil, catalog: CatalogStep? = nil, onImport: @escaping (URL) -> Void = { _ in },
+                onRefreshCatalog: @escaping () -> Void = {}, benchmark: BenchmarkStep? = nil,
+                onResume: @escaping () -> Void = {}, onStart: @escaping (_ counter: String, _ zone: String) -> Void) {
         self.resumable = resumable
+        self.catalog = catalog
+        self.onImport = onImport
+        self.onRefreshCatalog = onRefreshCatalog
+        self.benchmark = benchmark
         self.onResume = onResume
         self.onStart = onStart
     }
 
     public var body: some View {
         NavigationStack {
-            if let r = resumable {
-                Form {
+            Form {
+                if let r = resumable {
                     Section("Count in progress") {
                         Text("\(r.zone), counted by \(r.counter): \(r.units) units so far")
                         Button("Continue this count", action: onResume).frame(maxWidth: .infinity, minHeight: 44)
@@ -244,26 +272,85 @@ public struct StartView: View {
                         Text("Finish it in Review (lock) before starting a new one.").font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                } else {
+                    Section("Counted by") { TextField("Your name", text: $counter) }
+                    Section("Zone") { TextField("Zone", text: $zone) }
+                    Section {
+                        Button("Start count") { onStart(counter, zone) }
+                            .disabled(zone.trimmingCharacters(in: .whitespaces).isEmpty
+                                      || counter.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
                 }
-                .navigationTitle("StockMask")
-            } else {
-                startForm
+                if let catalog {
+                    CatalogSection(step: catalog, onImport: onImport, onRefresh: onRefreshCatalog)
+                }
+                if let benchmark {
+                    Section {
+                        Button(benchmark.running ? "Benchmarking…" : "Benchmark the detector", action: benchmark.start)
+                            .disabled(benchmark.running)
+                        if let status = benchmark.status { Text(status).font(.footnote) }
+                    } header: {
+                        Text("Testing")
+                    } footer: {
+                        Text("The detector on the GPU, the Neural Engine and the CPU in turn, on a test frame and on the "
+                             + "last photos counted. About a minute: keep StockMask open. The numbers go to the "
+                             + "diagnostics folder.")
+                    }
+                }
             }
+            .navigationTitle("StockMask")
         }
     }
+}
 
-    private var startForm: some View {
-        Form {
-            Section("Counted by") { TextField("Your name", text: $counter) }
-            Section("Zone") { TextField("Zone", text: $zone) }
-            Section {
-                Button("Start count") { onStart(counter, zone) }
-                    .disabled(zone.trimmingCharacters(in: .whitespaces).isEmpty
-                              || counter.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .frame(maxWidth: .infinity, minHeight: 44)
+/// The start screen's testing row: the detector benchmark, and how it is going.
+public struct BenchmarkStep {
+    public var running: Bool
+    public var status: String?
+    public var start: () -> Void
+
+    public init(running: Bool, status: String?, start: @escaping () -> Void) {
+        self.running = running
+        self.status = status
+        self.start = start
+    }
+}
+
+/// FR-4 in the test app: the CSVs in the app's folder, one tap each to import (StockMaskCore maps
+/// the columns from their names and skips duplicates, so importing a file twice adds nothing).
+struct CatalogSection: View {
+    let step: CatalogStep
+    let onImport: (URL) -> Void
+    let onRefresh: () -> Void
+
+    var body: some View {
+        Section {
+            Text(step.products == 0 ? "No products yet" : "\(step.products) products")
+            ForEach(step.files, id: \.self) { url in
+                Button {
+                    onImport(url)
+                } label: {
+                    Label("Import \(url.lastPathComponent)", systemImage: "square.and.arrow.down")
+                        .frame(minHeight: 44)
+                }
+                .disabled(step.importing)
             }
+            if step.importing {
+                HStack {
+                    ProgressView()
+                    Text("Importing…").foregroundStyle(.secondary)
+                }
+            }
+            if let message = step.message { Text(message).font(.footnote) }
+            Button("Look for CSV files again", action: onRefresh).font(.footnote)
+        } header: {
+            Text("Product catalogue")
+        } footer: {
+            Text("Suggested names come from it. Put a CSV (Excel “CSV UTF-8”, Google Sheets, or ; separated) with "
+                 + "columns such as Nombre, Marca, ml, U x caja, Código in StockMask's folder: the Files app › On My "
+                 + "iPhone › StockMask, or Finder › the iPhone › Files. Then import it here.")
         }
-        .navigationTitle("StockMask")
     }
 }
 

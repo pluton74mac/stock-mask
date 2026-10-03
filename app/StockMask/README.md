@@ -23,7 +23,7 @@ The Xcode project is `app/StockMask.xcodeproj`. These steps get it running on an
    ```
 3. Check that the packages still pass with Xcode's toolchain:
    ```sh
-   app/scripts/swift-test.sh app/Packages/StockMaskAR      # 57 tests
+   app/scripts/swift-test.sh app/Packages/StockMaskAR      # 72 tests
    app/scripts/swift-test.sh app/Packages/StockMaskCounting
    app/scripts/swift-test.sh app/Packages/StockMaskCore
    ```
@@ -74,15 +74,38 @@ the detector is missing.
 2. **Product → Run**. On the first run, trust the developer certificate on the phone: Settings →
    General → VPN & Device Management.
 3. Start a count, hold the phone still on a shelf for about a second, and check:
-   - yellow outlines, then green shapes, a `+N` and the card;
+   - yellow outlines, then green shapes standing upright, a `+N` and the card with the groups'
+     photos;
+   - counting is automatic: there is no shutter. The hold ring fills while the view is steady;
+   - the back button (top left) returns to the start screen, and "Continue this count" comes back;
    - the gauge button (top right) opens the HUD: tracking, FPS, detector ms, thermal, battery,
-     and the capture switch.
+     why nothing is counting ("now:"), "count now" for testing, and the capture switch.
 
-## 5. After the first device run
+From the command line, with the phone's id from `xcrun devicectl list devices`:
 
-- Run `app/scripts/typecheck-ios.sh` once more to make sure nothing drifted. It compiled the
-  iOS-only code for Mac Catalyst before Xcode was here. Read the iOS build's warnings too.
+```sh
+xcodebuild -project app/StockMask.xcodeproj -scheme StockMask -configuration Debug \
+    -destination 'platform=iOS,id=<id>' -allowProvisioningUpdates -derivedDataPath <dir> build
+xcrun devicectl device install app --device <id> <dir>/Build/Products/Debug-iphoneos/StockMask.app
+xcrun devicectl device process launch --device <id> com.pluton74mac.stockmask
+# with the detector benchmark: ... launch --device <id> com.pluton74mac.stockmask -- -StockMaskBenchmark
+```
+
+The first time the counting screen opens after an install, the Neural Engine compiles the model
+for itself: "Loading the detector" can last a few seconds.
+
+**Product names** come from a catalogue: put a CSV (Excel "CSV UTF-8", Google Sheets, or `;`
+separated, with columns such as Nombre, Marca, ml, U x caja, Código) in Files → On My iPhone →
+StockMask (or Finder → the iPhone → Files → StockMask), then tap Import on the start screen.
+
+## 5. Diagnostics
+
+- **What to copy after a test:** `Documents/diagnostics/` (Finder → the iPhone → Files →
+  StockMask → diagnostics, or `xcrun devicectl device copy from`, see
+  [StockMaskAR's README](../Packages/StockMaskAR/README.md#diagnostics)). One `diag-*.jsonl` per
+  counting screen opened, and `benchmark-*.jsonl` per benchmark.
 - Things only the phone can show are listed in
-  [StockMaskAR's README](../Packages/StockMaskAR/README.md#not-run-yet). Check them first.
-- Phase 0 measurements this build supports: P0-3 (the HUD's detector p50/p95, GPU against Neural
-  Engine), P0-4 (capture walks, then `research/capture_replay`), P0-9 (the torch button during AR).
+  [StockMaskAR's README](../Packages/StockMaskAR/README.md#still-to-check-on-the-phone).
+- Phase 0 measurements this build supports: P0-3 (the HUD's detector p50/p95 and the diagnostic
+  log, GPU against Neural Engine), P0-4 (capture walks, then `research/capture_replay`), P0-9 (the
+  torch button during AR).

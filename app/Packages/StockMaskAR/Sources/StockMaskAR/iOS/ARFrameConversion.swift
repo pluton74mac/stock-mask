@@ -1,5 +1,4 @@
 #if os(iOS)
-// NOT COMPILED YET: needs the iOS SDK (Xcode). See the package README, "Not compiled yet".
 @preconcurrency import ARKit
 import CoreVideo
 import simd

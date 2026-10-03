@@ -89,10 +89,12 @@ public struct HUDStats: Sendable, Equatable {
     public var sceneDistance: Float?
     public var tracks = 0
     public var stable = 0
+    public var stableWindow: Double = 0.5    // seconds the stable rule looks back (3 hits)
     public var lifted = 0
     public var unlifted = 0
     public var computeUnits = ""
     public var captureFrames: Int?
+    public var why = ""                      // why no commit is happening right now
 
     public init() {}
 
@@ -104,7 +106,7 @@ public struct HUDStats: Sendable, Equatable {
             "detector ms last \(f(detectorLast)) · p50 \(f(detectorP50)) · p95 \(f(detectorP95))",
             "thermal \(thermal.rawValue) · battery \(battery.map { "\(Int(($0 * 100).rounded()))%" } ?? "–")",
             "view \(f(viewSpeed))°/s · distance \(sceneDistance.map { String(format: "%.2f m", $0) } ?? "–")",
-            "tracks \(tracks) (stable \(stable)) · lifted \(lifted) · no depth \(unlifted)",
-        ] + (captureFrames.map { ["capturing: \($0) keyframes"] } ?? [])
+            "tracks \(tracks) (stable \(stable), 3 hits in \(f(stableWindow, 2)) s) · lifted \(lifted) · no depth \(unlifted)",
+        ] + (captureFrames.map { ["capturing: \($0) keyframes"] } ?? []) + (why.isEmpty ? [] : ["now: \(why)"])
     }
 }

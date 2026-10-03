@@ -117,15 +117,33 @@ public struct CommitResult: Sendable {
   `CountingBridge` turns boxes and the camera back to ARKit's landscape image for StockMaskCounting.
 - **Detector input.** The app makes the model's input itself: rfdetr's bilinear resize without
   antialiasing. Vision's antialiased resize loses bottles on its own.
-- **Compute units.** The detector runs on CPU + GPU by default: FP16 on the M5's Neural Engine
-  fails parity with PyTorch (`ml/coreml/RESULTS.md`). The HUD switches, and P0-3 decides on the
-  phone.
+- **Compute units.** The detector runs on CPU + Neural Engine by default (changed 3 October). On
+  the phone nothing counted on the GPU: a slower detector never met "3 hits in 0.5 s". The stable
+  window now stretches with the detector's period. FP16 on the M5's Neural Engine fails parity with
+  PyTorch (`ml/coreml/RESULTS.md`), so this stays under watch. The HUD switches, and P0-3 decides.
 - **Inner frame.** The engine's band grows to the visible part of the camera image. In portrait,
   aspect fill crops about 38% of its width, and nothing off screen should be counted.
 - **Drift alarm.** The session undoes the flagged commit and pauses until a preview over counted
   shelves lines up again.
 - **Relaunch.** The session and list resume. The camera forgets earlier shelves until map restore
   (FR-24, later).
+
+**As built (StockMaskAR, 3 October 2026): the owner's decisions of 2 October.**
+- **Automatic counting only.** No shutter on the counting screen; "count now" is in the debug
+  panel for testing. A hold needs a stable candidate at or above the commit score.
+- **Back to the start screen** from the counting screen; the count stays saved and continues in
+  the same AR world.
+- **The naming card shows each group's photos,** large, tap to zoom.
+- **Rows behind take the front bottle's group** (`RowGrouper`): same place along the shelf within
+  about half a bottle width, deeper. Naming the front bottle names the row.
+- **Suggested names.** A catalogue CSV in the app's Documents is imported from the start screen
+  (StockMaskCore's `planCatalogImport` / `applyCatalogImport`). Vision reads the label text on a
+  group's crops, `ProductMatcher` fuzzy-matches it against the catalogue, and the best match is
+  pre-selected with its confidence. Teach-once suggests products named earlier. Nothing is named
+  without a tap (FR-31).
+- **Overlays stand upright** in world space, not in the camera's axes.
+- **Diagnostics.** `Documents/diagnostics/*.jsonl`: about 2 Hz samples (detector, tracks, hold
+  trigger, why nothing commits), commits and events; and a detector benchmark per compute unit.
 
 `StockMaskCore` owns persistence and the sheet: venue, zone, sku, session, commit, counted_zone,
 item, item_group, manual_line and event, as in PRD §11 without `depth_multiplier`. Every commit is

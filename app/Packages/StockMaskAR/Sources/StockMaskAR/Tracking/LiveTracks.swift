@@ -26,7 +26,8 @@ public struct LiveTrack: Sendable, Identifiable, Equatable {
 
 /// Live tracks (PRD §11): detections associated across frames in 3D, using ARKit's world
 /// positions, because the objects stand still and the camera moves (ADR 002). A track with at least
-/// `stableHits` hits in the last `stableWindow` seconds is a stable candidate (ADR 003: 3 in 0.5 s).
+/// `stableHits` hits in the last `effectiveWindow` seconds is a stable candidate (ADR 003: 3 in 0.5 s,
+/// stretched when the detector runs slower than that allows).
 ///
 /// Association is greedy nearest-first, one to one, within `gate` metres and the same class.
 /// Detections the Lifter could not place (no depth) are associated in 2D by IoU instead.
@@ -49,18 +50,34 @@ public struct LiveTracks: Sendable {
 
     public var gate: Float = 0.05             // metres; bottles stand about 9 cm apart
     public var iouGate: Float = 0.3
-    public var maxAge: Double = 1.0           // seconds unseen before a track is dropped
+    public var maxAge: Double = 1.0           // seconds unseen before a track is dropped (at least)
     public var stableHits = 3
+    /// ADR 003's window ("3 hits in the last 0.5 s"), used as a minimum.
     public var stableWindow: Double = 0.5
+    public var maxStableWindow: Double = 1.5
+    /// The detector's recent period, seconds. The window stretches so that `stableHits` consecutive
+    /// runs always fit: with a fixed 0.5 s, a detector slower than one run per 250 ms (a GPU shared
+    /// with RealityKit, an unoptimised build) never makes a stable candidate, and nothing counts.
+    public var detectorPeriod: Double?
     public var minFusionWeight: Float = 0.2   // a running mean that never stops listening entirely
     public private(set) var tracks: [LiveTrack] = []
     private var nextID = 1
 
     public init() {}
 
+    /// The window stable candidates are judged on.
+    public var effectiveWindow: Double {
+        guard let p = detectorPeriod, p > 0 else { return stableWindow }
+        return min(maxStableWindow, max(stableWindow, Double(stableHits - 1) * p * 1.25))
+    }
+
+    /// How long a track survives unseen: a few detector periods, at least `maxAge`.
+    public var effectiveMaxAge: Double { max(maxAge, 2.5 * (detectorPeriod ?? 0)) }
+
     /// Associates one detector frame's observations. Returns the track ID of each observation.
     @discardableResult
     public mutating func update(_ observations: [Observation], at time: TimeInterval) -> [Int] {
+        let window = effectiveWindow, maxAge = effectiveMaxAge
         tracks.removeAll { $0.lastSeen < time - maxAge }
         var assigned = [Int?](repeating: nil, count: observations.count)
         var used = Set<Int>()   // track indices
@@ -107,7 +124,7 @@ public struct LiveTracks: Sendable {
                     let w = max(minFusionWeight, 1 / Float(tr.positionHits))
                     tr.position = tr.position.map { $0 + w * (p - $0) } ?? p
                 }
-                tr.hitTimes = tr.hitTimes.filter { $0 >= time - stableWindow * 2 } + [time]
+                tr.hitTimes = tr.hitTimes.filter { $0 >= time - window * 2 } + [time]
                 tr.lastSeen = time
                 tracks[t] = tr
                 ids.append(tr.id)
@@ -124,7 +141,7 @@ public struct LiveTracks: Sendable {
     }
 
     public func isStable(_ track: LiveTrack, at now: TimeInterval) -> Bool {
-        track.plausible && track.hits(within: stableWindow, at: now) >= stableHits
+        track.plausible && track.hits(within: effectiveWindow, at: now) >= stableHits
     }
 
     /// Stable candidates: what a commit counts, and what the hold trigger waits for.

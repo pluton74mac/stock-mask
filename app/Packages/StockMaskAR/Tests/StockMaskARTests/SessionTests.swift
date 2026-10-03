@@ -59,6 +59,7 @@ final class Walk {
     let pump: FramePump
     var t: TimeInterval = 0
     var visible: [Int]?          // which bottles the detector finds; nil = all in view
+    var score: Float = 0.8       // the score the detector gives them
     var tracking: TrackingStatus = .normal
     /// Tracking error: the pose ARKit reports is `drift * true pose`; the image and depth are true.
     var drift = matrix_identity_float4x4
@@ -79,7 +80,7 @@ final class Walk {
         let cam = camera ?? scene.camera
         var reported = cam
         reported.transform = drift * cam.transform
-        await detector.set(scene.detections(camera: cam, only: visible))
+        await detector.set(scene.detections(camera: cam, score: score, only: visible))
         let end = t + seconds
         while t < end {
             // Portrait, as on the phone: the engine gets boxes and intrinsics turned back to the

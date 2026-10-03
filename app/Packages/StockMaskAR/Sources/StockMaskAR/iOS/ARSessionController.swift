@@ -1,5 +1,4 @@
 #if os(iOS)
-// NOT COMPILED YET: needs the iOS SDK (Xcode). See the package README, "Not compiled yet".
 @preconcurrency import ARKit
 import CoreML
 import Observation
@@ -12,7 +11,11 @@ import UIKit
 /// - feeds every frame to `FramePump` (detector, lifting, tracks, hold trigger, commit, capture);
 /// - keeps one ARAnchor per commit and passes ARKit's updates to the engine (FR-21);
 /// - renders the 3D overlays with RealityKit (`OverlayRenderer`) and turns taps on "+" into counts;
-/// - loads the detector, polls thermal state and battery, haptics, torch, keyframes.
+/// - loads the detector, polls thermal state and battery, haptics, torch, keyframes;
+/// - writes the diagnostic log (`Documents/diagnostics/diag-*.jsonl`).
+///
+/// It outlives the counting screen: going back to the start screen pauses the camera, and
+/// continuing the count runs the same ARView and world again (anchors, overlays, tracks).
 @MainActor @Observable
 public final class ARSessionController {
     public let session: CountingSession
@@ -20,14 +23,17 @@ public final class ARSessionController {
     public private(set) var displayMapping: DisplayMapping?
     public private(set) var detectorStatus = "Loading the detector…"
     public private(set) var errorMessage: String?
-    /// P0-3 compares them; parity on a Mac favours the GPU (ml/coreml/RESULTS.md).
-    public var useNeuralEngine = false { didSet { if useNeuralEngine != oldValue { loadDetector() } } }
+    /// The Neural Engine is the default: on the GPU nothing counted on the phone (2 October), while
+    /// the Neural Engine counted. See StockMaskAR's README, "GPU or Neural Engine".
+    public var useNeuralEngine = true { didSet { if useNeuralEngine != oldValue { loadDetector() } } }
     /// Lift from `smoothedSceneDepth` instead of `sceneDepth` (P0-4 compares them).
     public var smoothedDepth = false
     public var torchOn = false { didSet { setTorch(torchOn) } }
+    @ObservationIgnored public let diagnostics: DiagnosticsLog?
 
     @ObservationIgnored private var pump: FramePump
-    @ObservationIgnored private weak var arView: ARView?
+    /// Kept (strongly) while the controller lives, so a closed counting screen comes back to the same world.
+    @ObservationIgnored private var arView: ARView?
     @ObservationIgnored private var delegate: ARDelegateProxy?
     @ObservationIgnored private var renderer: OverlayRenderer?
     @ObservationIgnored private var syncedRevision = -1
@@ -50,14 +56,30 @@ public final class ARSessionController {
         self.capture = capture
         files = CommitFileStore(dataDirectory: dataDirectory)
         pump = FramePump(session: session, capture: capture)
+        diagnostics = try? DiagnosticsLog(folder: AppFolders.diagnostics(documents: documents))
         session.environment = self
+        session.dataDirectory = dataDirectory
+        session.diagnostics = diagnostics
+        let info = Bundle.main.infoDictionary ?? [:]
+        session.log("start", "counting screen opened", [
+            "app": "\(info["CFBundleShortVersionString"] as? String ?? "?") (\(info["CFBundleVersion"] as? String ?? "?"))",
+            "build": AppFolders.buildKind, "device": DeviceInfo.modelIdentifier,
+            "system": "iOS \(UIDevice.current.systemVersion)",
+        ])
         loadDetector()
     }
 
     // MARK: the view
 
-    /// The camera view. RealityKit draws the camera and the 3D overlays; we configure ARKit.
+    /// The camera view. RealityKit draws the camera and the 3D overlays; we configure ARKit. The
+    /// second time (the count continued after going back to the start screen) it is the same view,
+    /// and its session runs again without a reset: same world, same anchors.
     public func makeARView() -> ARView {
+        if let view = arView {
+            run(view.session)
+            session.log("camera_resumed", "counting screen shown again")
+            return view
+        }
         let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
         view.renderOptions.insert(.disableMotionBlur)
         let proxy = ARDelegateProxy(controller: self)
@@ -95,9 +117,14 @@ public final class ARSessionController {
         UIDevice.current.isBatteryMonitoringEnabled = true
     }
 
+    /// Back to the start screen: the camera and the torch go off; the count, the world and the
+    /// overlays stay for when the count continues.
     public func pause() {
+        if torchOn { torchOn = false }
         arView?.session.pause()
         UIApplication.shared.isIdleTimerDisabled = false
+        session.log("camera_paused", "back to the start screen")
+        diagnostics?.flush()
     }
 
     // MARK: per frame (called on the main thread by ARKit)
@@ -155,23 +182,41 @@ public final class ARSessionController {
 
     // MARK: detector, torch, capture
 
+    var computeUnitsLabel: String { useNeuralEngine ? "Neural Engine" : "GPU" }
+
     func loadDetector() {
         let units: MLComputeUnits = useNeuralEngine ? .cpuAndNeuralEngine : .cpuAndGPU
-        let label = useNeuralEngine ? "Neural Engine" : "GPU"
-        detectorStatus = "Loading the detector…"
+        let label = computeUnitsLabel
+        detectorStatus = "Loading the detector (\(label))…"
         let documents = documents, cache = modelCache
         Task {
             do {
                 guard let url = try await DetectorModelLocator.locate(documents: documents, cache: cache) else {
                     detectorStatus = "No detector model in the app (see app/StockMask/README.md)"
+                    session.log("detector_missing", "no model in the bundle or Documents/Models")
                     return
                 }
                 // Loading compiles for the device's chips: keep it off the main thread.
+                let clock = ContinuousClock(), start = clock.now
                 let detector = try await Task.detached { try CoreMLDetector(compiledModelURL: url, computeUnits: units) }.value
+                let loadMs = (clock.now - start).milliseconds
+                // One run before counting: the first is slow (the chip's own compilation), and it
+                // shows the outputs' element types and strides for the log.
+                let warmUp = try? await detector.detect(
+                    DetectorInput(pixelBuffer: DetectorBenchmark.syntheticCameraFrame(), orientation: .right))
+                let outputs = await detector.lastOutputInfo
+                guard label == computeUnitsLabel else { return }   // switched again while this one loaded
                 session.setDetector(detector, computeUnits: label)
-                detectorStatus = detector.info.source
+                detectorStatus = "\(detector.info.source) · \(label)"
+                session.log("detector_loaded", label, [
+                    "loadMs": String(format: "%.0f", loadMs),
+                    "firstRunMs": warmUp.map { String(format: "%.0f", $0.milliseconds) } ?? "failed",
+                    "outputs": outputs, "scoreShown": "\(detector.info.scoreShown)",
+                    "scoreCommit": "\(detector.info.scoreCommit)", "model": detector.info.source, "build": AppFolders.buildKind,
+                ])
             } catch {
                 detectorStatus = "Detector failed to load: \(error)"
+                session.log("detector_failed", "\(error)", ["units": label])
             }
         }
     }

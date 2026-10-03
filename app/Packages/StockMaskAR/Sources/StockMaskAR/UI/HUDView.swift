@@ -1,22 +1,25 @@
 import SwiftUI
 
 /// The debug HUD (P0-2): tracking and mapping, FPS, detector rate and milliseconds, thermal state,
-/// battery, view speed, tracks; plus the switches the spike needs: auto-count, the detector's compute
-/// units (P0-3 compares them) and capture mode.
+/// battery, view speed, tracks, and why nothing is counting right now; plus the switches the spike
+/// needs: auto-count, the detector's compute units (P0-3 compares them), capture mode, and "count
+/// now" (testing only: counting is automatic, there is no shutter on the counting screen).
 public struct HUDView: View {
     let hud: HUDStats
     @Binding var autoCount: Bool
     @Binding var useNeuralEngine: Bool
     let capture: CaptureController?
     let manifest: () -> CaptureManifest
+    let countNow: (() -> Void)?
 
     public init(hud: HUDStats, autoCount: Binding<Bool>, useNeuralEngine: Binding<Bool>, capture: CaptureController?,
-                manifest: @escaping () -> CaptureManifest) {
+                manifest: @escaping () -> CaptureManifest, countNow: (() -> Void)? = nil) {
         self.hud = hud
         _autoCount = autoCount
         _useNeuralEngine = useNeuralEngine
         self.capture = capture
         self.manifest = manifest
+        self.countNow = countNow
     }
 
     public var body: some View {
@@ -27,6 +30,10 @@ public struct HUDView: View {
             .font(.system(size: 11, design: .monospaced))
             Toggle("Auto-count on hold", isOn: $autoCount).font(.caption)
             Toggle("Detector on Neural Engine (else GPU)", isOn: $useNeuralEngine).font(.caption)
+            if let countNow {
+                Button(action: countNow) { Label("Count now (testing)", systemImage: "camera.shutter.button") }
+                    .font(.caption).buttonStyle(.bordered)
+            }
             if let capture { CaptureControls(capture: capture, manifest: manifest) }
         }
         .toggleStyle(.switch)

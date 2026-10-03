@@ -88,16 +88,16 @@ public struct ToastView: View {
     }
 }
 
-/// The shutter, with the hold ring around it (FR-13).
-public struct ShutterButton: View {
+/// The hold ring (FR-13): counting is automatic, so this only shows how far a hold has got
+/// (yellow), and turns green when the view is counted. Not a button: there is no shutter (the
+/// owner's decision of 2 October; the debug panel keeps a "count now" for testing).
+public struct HoldRing: View {
     let hold: HoldState
-    let disabled: Bool
-    let action: () -> Void
+    let paused: Bool
 
-    public init(hold: HoldState, disabled: Bool, action: @escaping () -> Void) {
+    public init(hold: HoldState, paused: Bool) {
         self.hold = hold
-        self.disabled = disabled
-        self.action = action
+        self.paused = paused
     }
 
     var progress: Double {
@@ -109,23 +109,22 @@ public struct ShutterButton: View {
     }
 
     public var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle().fill(.white.opacity(disabled ? 0.35 : 0.95)).frame(width: 64, height: 64)
-                Circle().stroke(.white.opacity(0.4), lineWidth: 5).frame(width: 80, height: 80)
-                Circle().trim(from: 0, to: progress)
-                    .stroke(hold == .counted ? Color.green : Color.yellow, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .frame(width: 80, height: 80)
-            }
+        ZStack {
+            Circle().stroke(.white.opacity(paused ? 0.2 : 0.4), lineWidth: 6).frame(width: 72, height: 72)
+            Circle().trim(from: 0, to: progress)
+                .stroke(hold == .counted ? Color.green : Color.yellow, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .frame(width: 72, height: 72)
+            Image(systemName: hold == .counted ? "checkmark" : "hand.raised")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white.opacity(paused ? 0.4 : 0.9))
         }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .accessibilityLabel("Count this view")
+        .animation(.linear(duration: 0.1), value: progress)
+        .accessibilityLabel(hold == .counted ? "Counted: move on" : "Hold still to count")
     }
 }
 
-/// Thumb-reach controls (FR-11): list (badge "units · products"), shutter, undo.
+/// Thumb-reach controls (FR-11): the list (badge "units · products"), the hold ring, undo.
 public struct CountingControls: View {
     let session: CountingSession
     let onList: () -> Void
@@ -145,10 +144,7 @@ public struct CountingControls: View {
                 .frame(width: 96, height: 64)
             }
             Spacer()
-            // Without a detector a commit would only mark an empty counted zone: keep the shutter off.
-            ShutterButton(hold: session.hold, disabled: session.isPaused || session.isCommitting || session.detector == nil) {
-                session.shutter()
-            }
+            HoldRing(hold: session.hold, paused: session.isPaused || session.detector == nil)
             Spacer()
             Button {
                 Task { await session.undo() }
