@@ -132,8 +132,8 @@ matter more, and they are a different product.
 2. **Count what's visible; ask for what isn't.** The camera counts rows several deep by their
    tops. Kegs and partial cases come from the user, and it's quick. The goal is a walk around the
    storeroom that ends with a counted stock sheet, with no depth to type in.
-3. **Commit per shelf section, not per frame.** Counting happens on a steady hold or a tap, the
-   way a camera shutter works.
+3. **Commit per shelf section, not per frame.** Counting happens automatically on a steady hold.
+   There is no shutter button (decided 3 October 2026).
 4. **When in doubt, suggest; don't add.**
    - Inside counted areas the app only *suggests* additions.
    - If tracking looks off, it stops counting instead of guessing.
@@ -229,7 +229,7 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
 **Each count:**
 1. **Start count** → choose zone → full-screen camera. The list button shows `0 units · 0 products`.
 2. Point at a shelf section. **Yellow outlines** show what the camera sees.
-3. **Hold still about 1 s**, or tap the shutter.
+3. **Hold still about 1 s.** Counting is automatic.
    - The section flashes, then turns **green**.
    - One haptic tick, and a `+14` toast.
    - A small card slides up.
@@ -278,9 +278,9 @@ Priority: **M** = must have for the pilot, **S** = should have, **C** = could ha
 ### 8.3 Camera and counting
 | ID | Requirement | P |
 |---|---|---|
-| FR-11 | Full-screen camera with overlays. Thumb-reachable controls: list button (badge: units · products), shutter, torch, zone, undo. | M |
+| FR-11 | Full-screen camera with overlays. Thumb-reachable controls: list button (badge: units · products), torch, zone, undo, and a way back to the start screen (the count stays saved). | M |
 | FR-12 | Live detection of `bottle`, `can`, `case`, `carton` and `bag`, plus `bottle_top` for the rows behind, at 0.5–2.5 m, shown as yellow outlines. An open bottle is a bottle: it counts as one unit, like a sealed one. | M |
-| FR-13 | **Hold-to-count:** commit when the phone has been steady for about 0.8 s, at least one stable candidate is in view, and tracking is normal. The shutter always works. Auto-count can be switched off. | M |
+| FR-13 | **Hold-to-count, automatic only:** commit when the phone has been steady for about 0.8 s, at least one stable candidate is in view, and tracking is normal. No shutter button (product owner, 3 October 2026); a manual commit exists only in the debug panel, for testing. | M |
 | FR-14 | A commit counts only objects **fully inside the inner frame**. Objects cut by the frame edge wait for the next view. | M |
 | FR-15 | One haptic, one green sweep and one `+N` toast per commit, never one per item. | M |
 | FR-16 | Undo the last commit: 5 s snackbar, and also from the list. | M |
@@ -306,8 +306,8 @@ Design and evidence: [ADR 004](decisions/004-sku-identification.md).
 
 | ID | Requirement | P |
 |---|---|---|
-| FR-27 | Each commit groups identical-looking items. Each group gets a suggestion: case barcode first, then teach-once match, else none. | M |
-| FR-28 | The user confirms the suggestion, picks from the catalog (search), creates a product, or leaves "Unknown A". Naming can happen later, in the list or in review. **Every confirmation teaches the app.** | M |
+| FR-27 | Each commit groups identical-looking items, and items standing behind a front bottle in the same row join its group (the rows behind are the same product, so naming the front bottle names the row). Each group gets a suggestion: case barcode first, then teach-once match, then the label text read on the photo (OCR) matched against the catalog, else none. | M |
+| FR-28 | The naming card shows the group's photos, large and zoomable, so the user can see what the product is. The user confirms the suggestion, picks from the catalog (search), creates a product, or leaves "Unknown A". Naming can happen later, in the list or in review. **Every confirmation teaches the app.** | M |
 | FR-29 | ~~Multipliers: `rows deep ×1…×10` per group; case stacks = visible faces × depth.~~ Removed on 2 October 2026: no depth multipliers. The camera counts the rows behind by their tops (ADR 006's `bottle_top`, [walkthrough results §17](../research/walkthrough/RESULTS.md)). | – |
 | FR-30 | Manual lines: any product + quantity (cases and/or units) in a zone. Used for kegs, partial cases, closed cupboards, anything the camera can't see. | M |
 | FR-31 | A product is never assigned without a user confirmation, whether by tap, by confirming the card, or by bulk-confirming in review. | M |
@@ -584,4 +584,5 @@ We treat that as our pre-mortem:
 | 006 | Own data, CVAT, pre-labelling with Apache-licensed open-vocab models, unseen-venue holdout | [ADR 006](decisions/006-training-data.md) |
 | – | Every bottle the camera sees counts as one unit, sealed or open. No open-bottle or fill-level detection in the MVP; an open-bottle counter that estimates the liquid level comes after it. (product owner, 2 October 2026) | [Walkthrough results §16](../research/walkthrough/RESULTS.md) |
 | – | The camera counts everything it sees: cartons and bags get detector classes too (ADR 006 Amendment 1). (product owner, 3 October 2026) | [ADR 006](decisions/006-training-data.md) |
+| – | From the first phone test: counting is automatic only, with no shutter button (FR-13). The naming card shows the group's photos (FR-28). Rows behind a front bottle join its group, and names are suggested from the label text against the catalog (FR-27). (product owner, 3 October 2026) | – |
 | – | No "more behind?" prompt and no `×N deep` multiplier (FR-29 removed). The goal is a walk around the storeroom that ends with a counted stock sheet: the camera counts what it sees, including the rows behind by their tops. (product owner, 2 October 2026) | [Walkthrough results §16–17](../research/walkthrough/RESULTS.md) |
