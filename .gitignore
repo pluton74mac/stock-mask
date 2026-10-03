@@ -36,3 +36,8 @@ ml/.venv*/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+DerivedData/

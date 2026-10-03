@@ -7,11 +7,11 @@ Everything the app does is in the local packages under [`app/Packages`](../Packa
 | File | What |
 |---|---|
 | `StockMaskApp.swift` | `@main`: shows `StockMaskRootView` (LiDAR check, start or continue a count, the counting screen) |
-| `Info.plist` | The keys Xcode doesn't generate: camera use, `arkit`, portrait only, file sharing |
-| `README.md` | These steps. Not part of the app: untick its target membership (step 4) |
+| `Info.plist` | The keys Xcode doesn't generate: camera use, `arkit`, portrait only, full screen, file sharing |
+| `Assets.xcassets` | App icon and accent colour |
+| `README.md` | These steps. Kept out of the app bundle by the project's membership exceptions |
 
-There is no `.xcodeproj` in the repository: it can't be made or checked without Xcode. These steps
-create it once Xcode is installed. They take about 15 minutes.
+The Xcode project is `app/StockMask.xcodeproj`. These steps get it running on an iPhone.
 
 ## 1. Install Xcode
 
@@ -41,76 +41,31 @@ uv pip install --python .venv/bin/python torch==2.7.0 torchvision==0.22.0 \
 .venv/bin/python export_detector.py        # writes ml/coreml/out/StockMaskDetector.mlpackage
 ```
 
-## 3. Create the project
+## 3. The project
 
-1. Xcode → **File → New → Project…** → **iOS** → **App** → Next.
-2. Fill in:
-   - Product Name: **StockMask**
-   - Team: your Apple ID's team (a free personal team is enough to run on your own iPhone)
-   - Organization Identifier: e.g. `com.yourname`, so the bundle id is `com.yourname.StockMask`
-   - Interface: **SwiftUI**; Language: **Swift**; Testing System: **None**; Storage: **None**
-3. Save it **outside the repository**, e.g. in `~/Desktop/scratch`, with "Create Git repository"
-   unticked. Xcode makes `~/Desktop/scratch/StockMask/StockMask.xcodeproj` and a source folder
-   `~/Desktop/scratch/StockMask/StockMask/`.
-4. Quit Xcode. Then move two things into the repository and throw the rest away:
-   ```sh
-   mv ~/Desktop/scratch/StockMask/StockMask.xcodeproj app/StockMask.xcodeproj
-   mv ~/Desktop/scratch/StockMask/StockMask/Assets.xcassets app/StockMask/Assets.xcassets
-   rm -rf ~/Desktop/scratch/StockMask     # its ContentView.swift and StockMaskApp.swift are replaced by ours
-   ```
-   The project refers to its source folder as `StockMask` next to the `.xcodeproj`, so it now
-   uses this folder, `app/StockMask/`. If the template also made a `Preview Content` folder, move it
-   too, or clear the target's **Development Assets** build setting.
+`app/StockMask.xcodeproj` is in the repository (created 3 October 2026, Xcode 27). It holds:
+- the app target, iOS 18, portrait only;
+- `Info.plist` merged into the generated one;
+- `app/Packages/StockMaskAR` as a local package, which brings StockMaskCounting and StockMaskCore with it;
+- GRDB 7.11.1, fetched from GitHub on the first build;
+- a reference to the git-ignored `ml/coreml/out/StockMaskDetector.mlpackage`. Export it first (step 2), or the build fails on the missing file.
 
-## 4. Set up the target
+It builds from the command line without signing:
 
-Open `app/StockMask.xcodeproj` and select the **StockMask** target.
+```sh
+xcodebuild -project app/StockMask.xcodeproj -scheme StockMask -destination 'generic/platform=iOS' \
+    CODE_SIGNING_ALLOWED=NO build
+```
 
-1. **General:**
-   - Minimum Deployments: **iOS 18.0**.
-   - Supported Destinations: iPhone (keep iPad if you want iPad Pro).
-   - Deployment Info: tick **Portrait** only, for iPhone and for iPad.
-2. **Build Settings** (All, Combined):
-   - **Info.plist File** (`INFOPLIST_FILE`): `StockMask/Info.plist`. Leave **Generate Info.plist
-     File** on: Xcode merges our keys into the ones it generates.
-   - **Swift Language Version**: Swift 6.
-   - **CoreML Model Class Generation Language**: None. The app loads the model by its URL, so the
-     generated class would go unused.
-3. **Target membership:** in the project navigator, select `README.md` and `Info.plist` in the
-   StockMask group, and untick the StockMask target in the File inspector. This keeps them out of
-   Copy Bundle Resources. If a build later fails with "Multiple commands produce …/Info.plist",
-   this is the step that was missed.
+**Signing.** Signing is automatic, with no team stored in the repository.
+1. In Xcode, select the StockMask target → **Signing & Capabilities** → **Team**.
+2. Choose your Apple ID's team; a free personal team is enough for your own iPhone.
+3. If Xcode says the bundle id `com.pluton74mac.stockmask` is taken, change it to something unique.
 
-What `Info.plist` adds:
-
-| Key | Value | Why |
-|---|---|---|
-| `NSCameraUsageDescription` | "StockMask uses the camera and LiDAR to count …" | Camera permission prompt |
-| `UIRequiredDeviceCapabilities` | `arkit` | No install on devices without ARKit. There is no LiDAR capability key, so the app checks LiDAR itself at launch (`ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)`) and shows "needs LiDAR" otherwise |
-| `UISupportedInterfaceOrientations` (and `~ipad`) | portrait | The camera code assumes portrait (`FrameOrientation.right`) |
-| `UIFileSharingEnabled`, `LSSupportsOpeningDocumentsInPlace` | YES | Documents (captures, models to try) show in Finder and in the Files app |
-| `UILaunchScreen` | empty | The default launch screen |
-
-## 5. Add the local packages
-
-1. **File → Add Package Dependencies…** → **Add Local…** → choose `app/Packages/StockMaskAR` →
-   **Add Package**.
-2. In the dialog, add the product **StockMaskAR** to the **StockMask** target.
-
-StockMaskCounting and StockMaskCore come in as StockMaskAR's own local dependencies, and GRDB
-(pinned at 7.11.1) is fetched once from GitHub. Don't add them separately.
-
-## 6. Bundle the model
-
-1. Drag `ml/coreml/out/StockMaskDetector.mlpackage` into the StockMask group in Xcode.
-2. In the dialog, **untick "Copy items if needed"**, so the project keeps a reference to the
-   git-ignored export instead of a 54 MB copy, and tick the **StockMask** target.
-
-Xcode compiles it into `StockMaskDetector.mlmodelc` inside the app, which `DetectorModelLocator`
-loads. To try another model without rebuilding (e.g. a fine-tuned one), copy its `.mlpackage` into
-the app's **Documents/Models** folder (Finder → the iPhone → Files → StockMask). The newest one
-there wins; it is compiled on the phone at the next start. Without any model the app still runs,
-and the HUD says the detector is missing.
+To try another model without rebuilding (e.g. a fine-tuned one), copy its `.mlpackage` into the app's
+**Documents/Models** folder: Finder → the iPhone → Files → StockMask. The newest one there wins, and
+it is compiled on the phone at the next start. Without any model the app still runs, and the HUD says
+the detector is missing.
 
 ## 7. Run it
 
