@@ -398,7 +398,7 @@ ARSession (world tracking, sceneDepth, 1920×1440@60)
  │               → Lifter: box → 3D point (high-confidence LiDAR pixels in the label band;
  │                 shelf-plane fallback for glass) → plausibility (size per class, on a support surface)
  │               → LiveTracks: 3D association across frames → stable candidates (≥ 3 hits)
- ├─ steady ~0.8 s or shutter → CommitEngine
+ ├─ steady ~0.8 s → CommitEngine
  │     1. candidates fully inside the inner frame
  │     2. local drift refinement (±4.5 cm) + 1:1 Hungarian match against counted items
  │     3. inside counted zones: matched = green, unmatched = possible miss (never added)
