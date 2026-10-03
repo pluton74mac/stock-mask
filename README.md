@@ -36,4 +36,8 @@ yet.
   (Ultralytics) and RF-DETR (Roboflow) to Core ML, with an op inventory.
 - [`research/walkthrough/`](research/walkthrough/): replays a phone video of a storeroom walk
   through hold-to-count, the detectors and 2D anti-double-count matching, before the iOS spike
-  exists (`python walkthrough.py VIDEO`). Includes how to film one.
+  exists (`python walkthrough.py VIDEO`). Includes how to film one. Results on real footage are in
+  [`RESULTS.md`](research/walkthrough/RESULTS.md). The first walk was continuous sweeps at
+  0.4–0.7 m. On the second, filmed with holds, every hold committed, but some stock was never held.
+  Against per-product reference counts, detecting whole bottles finds about half the stock in rows
+  2–5 deep; counting caps finds most of it on the spirits shelves.

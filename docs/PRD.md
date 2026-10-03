@@ -30,8 +30,8 @@
     3 cm of drift**.
   - The new design: **0% up to 3 cm, 0.2% at 5 cm**
     ([ADR 003](decisions/003-double-count.md)).
-- **The camera counts what it can see; the user supplies what it can't:**
-  - rows several deep (a "×N deep" stepper);
+- **The camera counts what it can see, including rows several deep by their tops; the user
+  supplies what it can't** (no depth stepper since 2 October 2026):
   - kegs (full and empty look identical);
   - partial cases;
   - the product name, the first time.
@@ -76,7 +76,6 @@ StockMask turns a storeroom walk into a stocktake.
 3. Green stays green. Come back to a shelf later and nothing is counted twice.
 4. The counter confirms only what a camera cannot know:
    - which product a new group is (once; the app remembers);
-   - how many rows deep;
    - kegs and partial cases.
 5. They leave with the list, and with a photo record of every shelf that was counted.
 
@@ -130,8 +129,9 @@ matter more, and they are a different product.
    - Every line has a photo.
    - At Starbucks, staff ended up recounting NomadGo's scans by hand, and the tool was retired
      (§12).
-2. **Count what's visible; ask for what isn't.** Depth, kegs and partial cases come from the
-   user, and it's quick.
+2. **Count what's visible; ask for what isn't.** The camera counts rows several deep by their
+   tops. Kegs and partial cases come from the user, and it's quick. The goal is a walk around the
+   storeroom that ends with a counted stock sheet, with no depth to type in.
 3. **Commit per shelf section, not per frame.** Counting happens on a steady hold or a tap, the
    way a camera shutter works.
 4. **When in doubt, suggest; don't add.**
@@ -149,7 +149,9 @@ matter more, and they are a different product.
 4. An export that goes straight into the venue's spreadsheet or POS import.
 
 **Non-goals (MVP):**
-- partial or open-bottle levels;
+- telling open bottles from sealed ones, or reading fill levels: every bottle the camera sees
+  counts as one unit (decided 2 October 2026);
+- a "more behind?" prompt for stock hidden behind what the camera sees (decided 2 October 2026);
 - kegs by camera;
 - POS integration beyond file export;
 - purchase orders;
@@ -187,7 +189,6 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
 - "possible miss" suggestions;
 - a drift alarm;
 - groups named once, then suggested (teach-once + case barcodes);
-- "rows deep" and case-stack multipliers;
 - manual lines (kegs, partial cases, closed cupboards);
 - a live list over the camera;
 - review, lock, and XLSX/CSV export via the share sheet;
@@ -197,7 +198,8 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
 - Spanish (es-419) and English.
 
 **Out of the MVP:**
-- partial bottles;
+- open-bottle detection and fill levels (an open bottle counts as one unit);
+- a "more behind?" prompt for hidden stock;
 - kegs by camera;
 - empties/returnables detection (the user removes them);
 - multi-device merge;
@@ -211,7 +213,7 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
 2. Session merge across devices.
 3. Backend (Supabase + PowerSync) and a web view.
 4. PAR / below-par flags.
-5. Partial-bottle assist.
+5. An open-bottle counter that estimates each open bottle's liquid level.
 6. An "empty bottle / crate" class.
 7. Android, if the market requires it (ADR 001).
 
@@ -230,8 +232,7 @@ The Phase 0 engineering gates (detector, depth, revisit error, end-to-end) are i
    - The section flashes, then turns **green**.
    - One haptic tick, and a `+14` toast.
    - A small card slides up.
-4. **The card lists the groups.** Each group has a `×1 deep` stepper. Confirm with one tap, or
-   ignore it and fix it later. Example:
+4. **The card lists the groups.** Confirm each with one tap, or ignore it and fix it later. Example:
    - `8 × bottle → Jameson 700 ml ✓`
    - `6 × bottle → name it`
    - `3 × case → Quilmes 1 L ×12 ✓ (barcode)`
@@ -277,12 +278,12 @@ Priority: **M** = must have for the pilot, **S** = should have, **C** = could ha
 | ID | Requirement | P |
 |---|---|---|
 | FR-11 | Full-screen camera with overlays. Thumb-reachable controls: list button (badge: units · products), shutter, torch, zone, undo. | M |
-| FR-12 | Live detection of `bottle`, `can` and `case` at 0.5–2.5 m, shown as yellow outlines. | M |
+| FR-12 | Live detection of `bottle`, `can` and `case` at 0.5–2.5 m, shown as yellow outlines. An open bottle is a bottle: it counts as one unit, like a sealed one. | M |
 | FR-13 | **Hold-to-count:** commit when the phone has been steady for about 0.8 s, at least one stable candidate is in view, and tracking is normal. The shutter always works. Auto-count can be switched off. | M |
 | FR-14 | A commit counts only objects **fully inside the inner frame**. Objects cut by the frame edge wait for the next view. | M |
 | FR-15 | One haptic, one green sweep and one `+N` toast per commit, never one per item. | M |
 | FR-16 | Undo the last commit: 5 s snackbar, and also from the list. | M |
-| FR-17 | Tap a green item: see its photo crop, group and product, and uncount it. Tap a group badge: edit product, quantity, depth. | M |
+| FR-17 | Tap a green item: see its photo crop, group and product, and uncount it. Tap a group badge: edit product and quantity. | M |
 | FR-18 | Low-confidence detections are dashed and excluded from auto-count; tap to include. | M |
 | FR-19 | **Open case:** if units are detected inside a case's outline (seen from above), count the units, not the case. **Closed cases count as full**, and the counter corrects exceptions. | M |
 | FR-20 | Counting pauses automatically, with the reason shown, when tracking is limited: relocalising, fast motion, too dark. | M |
@@ -306,7 +307,7 @@ Design and evidence: [ADR 004](decisions/004-sku-identification.md).
 |---|---|---|
 | FR-27 | Each commit groups identical-looking items. Each group gets a suggestion: case barcode first, then teach-once match, else none. | M |
 | FR-28 | The user confirms the suggestion, picks from the catalog (search), creates a product, or leaves "Unknown A". Naming can happen later, in the list or in review. **Every confirmation teaches the app.** | M |
-| FR-29 | Multipliers: `rows deep ×1…×10` per group; case stacks = visible faces × depth. | M |
+| FR-29 | ~~Multipliers: `rows deep ×1…×10` per group; case stacks = visible faces × depth.~~ Removed on 2 October 2026: no depth multipliers. The camera counts the rows behind by their tops (ADR 006's `bottle_top`, [walkthrough results §17](../research/walkthrough/RESULTS.md)). | – |
 | FR-30 | Manual lines: any product + quantity (cases and/or units) in a zone. Used for kegs, partial cases, closed cupboards, anything the camera can't see. | M |
 | FR-31 | A product is never assigned without a user confirmation, whether by tap, by confirming the card, or by bulk-confirming in review. | M |
 
@@ -429,12 +430,11 @@ ARSession (world tracking, sceneDepth, 1920×1440@60)
 | `commit` | id, session_id, zone_id, anchor_id, rack_tag_id?, pose, keyframe_file, created_at, undone |
 | `counted_zone` | id, commit_id, anchor-space bounds |
 | `item` | id, commit_id, anchor-space position, class, confidence, group_id, crop_file, removed |
-| `item_group` | id, session_id, sku_id?, label ("Unknown A"), depth_multiplier, confirmed |
+| `item_group` | id, session_id, sku_id?, label ("Unknown A"), confirmed |
 | `manual_line` | id, session_id, zone_id, sku_id, full_cases, loose_units, note |
 | `event` | id, session_id, ts, type, payload (JSON) |
 
-**Line totals** = Σ over each product's groups of (counted units × depth multiplier), plus manual
-lines. Units and cases are converted with `units_per_case`, and the export carries both
+**Line totals** = Σ over each product's groups of counted units, plus manual lines. Units and cases are converted with `units_per_case`, and the export carries both
 `full_cases` and `total_units`.
 
 **Tooling:**
@@ -466,7 +466,7 @@ We treat that as our pre-mortem:
 | Reflections off steel fridges doubled counts (5 cartons → 10) | Walk-ins are steel; bottles are glass | 3D plausibility (objects rest on a support surface; depth consistent). Zones + 1:1 matching. Reflections labelled as negatives. Steel surface in the P0-8 test room. |
 | Wi-Fi drops wiped count progress | Basements and walk-ins have no signal | No network dependency at all. One transaction per commit. Kill/relaunch test (G7). |
 | Seasonal packaging needed up to 6 weeks of retraining | Labels change constantly | The detector knows only bottle / can / case. Products are taught by the user in one tap. No retraining per product. |
-| Stores had to rearrange back-of-house storage | Bars won't | Count what's visible, with depth multipliers and manual lines. |
+| Stores had to rearrange back-of-house storage | Bars won't | Count what's visible, including the tops of rows behind, plus manual lines. |
 | Staff had to recount every scan | Same risk | Visible per-shelf result, undo, photos, conservative dedup. **Recount rate is a primary pilot metric.** |
 
 **Other risks:**
@@ -481,7 +481,7 @@ We treat that as our pre-mortem:
 | RF-DETR too slow with ARKit | Laggy preview | Gate G3. Fallback: YOLO26n + Enterprise License (about $5k/yr, anecdotal). |
 | Detector accuracy on real storerooms | Corrections eat the time savings | 1,500 → 4,000 → 10,000 labelled images. Unseen-venue holdout. Gate G2. |
 | First count is slow (every group needs naming) | Bad first impression | Catalog import. Case barcodes. Say it plainly: the 3rd count is the benchmark. |
-| Hidden units (rows deep, closed cases) | Under-count | "×N deep" per group. Review warns on groups with no depth set on deep shelves (C). |
+| Hidden units (rows deep, closed cases) | Under-count | Count the tops of the rows behind (`bottle_top`): on the second storeroom walk, tops took the count from about half the bottles to about seven eighths. Stock the camera can't see is not counted (decided 2 October 2026). Gates G2 and G7 include rows several deep. |
 | Torch unavailable during ARKit | Can't count dark rooms | P0-9. Fallback: exposure bias + a clip-on light. |
 | Heat and battery over 30 min | Forced stop | Thermal ladder (§10). Resume after pause. Measured in P0-3. |
 | Photo sensitivity at venues | Resistance to the camera | On-device only. No upload. Opt-in bundle with face blur. |
@@ -522,7 +522,7 @@ We treat that as our pre-mortem:
 - POS/export templates;
 - multi-device merge + backend;
 - PAR flags;
-- partial-bottle assist;
+- an open-bottle counter that estimates the liquid level;
 - the market/platform decision (Android or English-speaking markets first).
 
 **Phase 3:** variance vs sales, multi-venue dashboard, team permissions.
@@ -561,7 +561,8 @@ We treat that as our pre-mortem:
 | Q7 | Who counts in pilot venues: managers or staff? | Affects wording and training; ask in P0-1. |
 
 **v1's open questions, answered by this review:**
-- **Accuracy bar for v1?** Full sealed units only; partials are Phase 2.
+- **Accuracy bar for v1?** Every bottle the camera sees counts as one unit, sealed or open. Fill
+  levels come after the MVP, with an open-bottle counter (decided 2 October 2026).
 - **Who assigns the product?** Count first, name the group once; the app suggests afterwards.
 - **Case default?** Count cases as cases; the export carries both cases and units, so no toggle.
 - **One phone or two?** One phone per session. Two phones can count different zones, with
@@ -580,3 +581,5 @@ We treat that as our pre-mortem:
 | 004 | Generic classes; the user names groups once; suggestions from case barcodes + FeaturePrint kNN; never silent | [ADR 004](decisions/004-sku-identification.md) |
 | 005 | GRDB/SQLite, no backend in the MVP, XLSX + Argentina-ready CSV | [ADR 005](decisions/005-storage-backend-export.md) |
 | 006 | Own data, CVAT, pre-labelling with Apache-licensed open-vocab models, unseen-venue holdout | [ADR 006](decisions/006-training-data.md) |
+| – | Every bottle the camera sees counts as one unit, sealed or open. No open-bottle or fill-level detection in the MVP; an open-bottle counter that estimates the liquid level comes after it. (product owner, 2 October 2026) | [Walkthrough results §16](../research/walkthrough/RESULTS.md) |
+| – | No "more behind?" prompt and no `×N deep` multiplier (FR-29 removed). The goal is a walk around the storeroom that ends with a counted stock sheet: the camera counts what it sees, including the rows behind by their tops. (product owner, 2 October 2026) | [Walkthrough results §16–17](../research/walkthrough/RESULTS.md) |
