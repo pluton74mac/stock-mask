@@ -17,8 +17,9 @@ LiDAR or ARKit poses:
        owlv2_caps    OWLv2 prompted with "a photo of a bottle cap", each cap counted as a bottle:
                      do the tops of the rows behind the front one count the bottles there?
                      (ADR 006's candidate bottle_top class)
-       rfdetr_ft     RF-DETR fine-tuned on bottle, can, case and bottle_top (ml/train.py), from the checkpoint
-                     in $RFDETR_FT_CHECKPOINT. A top with no counted bottle of its own counts as a bottle.
+       rfdetr_ft     RF-DETR fine-tuned on bottle, can, case, bottle_top, carton and bag (ml/train.py), from the
+                     checkpoint in $RFDETR_FT_CHECKPOINT. A top with no counted bottle of its own counts as a
+                     bottle. Only this detector reports cartons and bags (--truth carton=11,bag=11).
      A box counts only if it is whole (not cut by the image border), its centre is in the inner
      frame (FR-14) and its score clears the commit threshold (FR-18).
   3. Double counting between commits, in 2D. Shelf fronts are roughly planar, so a homography
@@ -57,7 +58,8 @@ import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-CLASSES = ("bottle", "can", "case")
+CLASSES = ("bottle", "can", "case")  # the owlv2 detector's prompts: changing them would stale its detection cache
+COUNTED = CLASSES + ("carton", "bag")  # what --truth, the report and the COCO export know (rfdetr_ft finds all five)
 HOLD_S = 0.8  # FR-13: steady this long, then commit
 MAX_DEG_S = 10.0  # ADR 003: "angular speed < 10 deg/s"
 REARM_DEG = 5.0  # after a commit, the view must move this far before the next commit can fire
@@ -401,7 +403,7 @@ class RFDETRFineTuned:
         r = self.model.predict(np.ascontiguousarray(c.image[..., ::-1]), threshold=shown)
         known = np.array([k < len(self.names) for k in r.class_id], dtype=bool) if len(r) else np.zeros(0, bool)
         d = Dets(r.xyxy[known], r.confidence[known], np.array([self.names[k] for k in r.class_id[known]], dtype="<U10"))
-        d = Dets.cat([clean(d.take(d.cls == k)) for k in ("bottle", "can", "case", "bottle_top")])
+        d = Dets.cat([clean(d.take(d.cls == k)) for k in self.names])
         bottle, top = d.cls == "bottle", d.cls == "bottle_top"
         b, t = d.boxes, d.boxes[top]
         cand = []  # (distance, bottle index, top index) for tops in a counted bottle's top region
@@ -953,8 +955,8 @@ def parse_truth(s: str | None) -> dict:
     out = {}
     for part in s.split(","):
         k, v = part.split("=")
-        if k.strip() not in CLASSES:
-            raise SystemExit(f"--truth: unknown class {k}; use {', '.join(CLASSES)}")
+        if k.strip() not in COUNTED:
+            raise SystemExit(f"--truth: unknown class {k}; use {', '.join(COUNTED)}")
         out[k.strip()] = int(v)
     return out
 
@@ -1024,9 +1026,11 @@ def report(args, video, commits, holds, per, dets, truth, view_truth, out, secon
           + (" truth | error after matching |" if truth else ""),
           "|---|---|---|---|---|" + ("---|---|" if truth else "")]
     for name, rs in per.items():
-        for cl in CLASSES:
+        for cl in COUNTED:
             if name in ("rfdetr", "rfdetr_tiled", "owlv2_caps") and cl != "bottle":
                 continue
+            if cl not in CLASSES and name != "rfdetr_ft":
+                continue  # only the fine-tuned detector knows cartons and bags
             naive = sum(int(((d.cls == cl) & (d.scores >= DETECTORS[name][1])
                              & (view_status(d.boxes, *c.image.shape[1::-1], args.band_px) == "inner")).sum())
                         for c, d in zip(commits, dets[name]))
@@ -1116,10 +1120,10 @@ def write_coco(out: str, commits: list, dets: Dets, lo: float):
         for b, s, cl in zip(d.boxes, d.scores, d.cls):
             if s >= lo:
                 x, y, w, h = float(b[0]), float(b[1]), float(b[2] - b[0]), float(b[3] - b[1])
-                anns.append(dict(id=len(anns) + 1, image_id=c.n, category_id=CLASSES.index(cl) + 1,
+                anns.append(dict(id=len(anns) + 1, image_id=c.n, category_id=COUNTED.index(cl) + 1,
                                  bbox=[round(v, 1) for v in (x, y, w, h)], area=round(w * h, 1), iscrowd=0,
                                  score=round(float(s), 3)))
-    json.dump(dict(images=images, annotations=anns, categories=[dict(id=i + 1, name=c) for i, c in enumerate(CLASSES)]),
+    json.dump(dict(images=images, annotations=anns, categories=[dict(id=i + 1, name=c) for i, c in enumerate(COUNTED)]),
               open(os.path.join(out, "cvat", "annotations", "instances_default.json"), "w"))
 
 
@@ -1232,7 +1236,7 @@ def main():
                                  rejected=[[commits[a].n, inl, commits[b].n] for a, inl, b in per[names[0]][k]["rejected"]])
                             for k, c in enumerate(commits)],
                    totals={name: {cl: int(sum(((dets[name][k].cls == cl) & (r["status"] == "new")).sum()
-                                              for k, r in enumerate(per[name]))) for cl in CLASSES} for name in names})
+                                              for k, r in enumerate(per[name]))) for cl in COUNTED} for name in names})
     json.dump(summary, open(os.path.join(out, "summary.json"), "w"), indent=1)
     print(f"done in {(time.time() - t0) / 60:.1f} min: {os.path.join(out, 'report.md')}")
 
